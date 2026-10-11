@@ -1,0 +1,394 @@
+city:
+  name: "Metropolis AI Health Network"
+  coordinate_scale_km: 2.0  # 1 grid unit = 2 km
+  default_speed_kmh: 45.0
+  max_speed_kmh: 70.0       # Theoretical upper bound for admissible heuristic
+
+nodes:
+  # Hospitals
+  H1:
+    name: "City General"
+    type: "hospital"
+    x: 2.0
+    y: 7.0
+    bed_capacity: 500
+    target_stock:
+      O+: 8
+      O-: 5
+      A+: 6
+      A-: 4
+      B+: 6
+      B-: 4
+      AB+: 3
+      AB-: 2
+    initial_stock:
+      O+: 4
+      O-: 1
+      A+: 3
+      A-: 1
+      B+: 3
+      B-: 1
+      AB+: 2
+      AB-: 1
+
+  H2:
+    name: "St. Mary's"
+    type: "hospital"
+    x: 8.0
+    y: 8.5
+    bed_capacity: 350
+    target_stock:
+      O+: 6
+      O-: 4
+      A+: 5
+      A-: 3
+      B+: 5
+      B-: 3
+      AB+: 2
+      AB-: 1
+    initial_stock:
+      O+: 3
+      O-: 1
+      A+: 2
+      A-: 1
+      B+: 2
+      B-: 0
+      AB+: 1
+      AB-: 1
+
+  H3:
+    name: "Apollo"
+    type: "hospital"
+    x: 9.0
+    y: 3.5
+    bed_capacity: 450
+    target_stock:
+      O+: 7
+      O-: 5
+      A+: 5
+      A-: 3
+      B+: 5
+      B-: 3
+      AB+: 3
+      AB-: 2
+    initial_stock:
+      O+: 3
+      O-: 0
+      A+: 3
+      A-: 1
+      B+: 2
+      B-: 1
+      AB+: 1
+      AB-: 0
+
+  H4:
+    name: "Govt Medical College"
+    type: "hospital"
+    x: 1.5
+    y: 2.0
+    bed_capacity: 600
+    target_stock:
+      O+: 10
+      O-: 6
+      A+: 8
+      A-: 4
+      B+: 8
+      B-: 4
+      AB+: 4
+      AB-: 2
+    initial_stock:
+      O+: 5
+      O-: 1
+      A+: 4
+      A-: 2
+      B+: 3
+      B-: 1
+      AB+: 2
+      AB-: 1
+
+  H5:
+    name: "Children's Hospital"
+    type: "hospital"
+    x: 5.5
+    y: 5.0
+    bed_capacity: 250
+    target_stock:
+      O+: 5
+      O-: 4
+      A+: 4
+      A-: 3
+      B+: 4
+      B-: 2
+      AB+: 2
+      AB-: 1
+    initial_stock:
+      O+: 2
+      O-: 0
+      A+: 2
+      A-: 1
+      B+: 2
+      B-: 0
+      AB+: 1
+      AB-: 1
+
+  # Blood Banks
+  CBB:
+    name: "Central Blood Bank"
+    type: "central_bank"
+    x: 5.0
+    y: 8.0
+    initial_inventory:
+      O+: 18
+      O-: 6
+      A+: 14
+      A-: 6
+      B+: 12
+      B-: 5
+      AB+: 8
+      AB-: 4
+
+  RBB:
+    name: "Reserve Blood Bank"
+    type: "reserve_bank"
+    x: 7.5
+    y: 1.5
+    initial_inventory:
+      O+: 8
+      O-: 4
+      A+: 6
+      A-: 3
+      B+: 5
+      B-: 2
+      AB+: 3
+      AB-: 2
+
+  # Junctions
+  J1:
+    name: "Northwest Junction"
+    type: "junction"
+    x: 3.0
+    y: 8.5
+  J2:
+    name: "Northeast Junction"
+    type: "junction"
+    x: 7.0
+    y: 7.5
+  J3:
+    name: "West Junction"
+    type: "junction"
+    x: 1.5
+    y: 5.0
+  J4:
+    name: "Central Crossing"
+    type: "junction"
+    x: 4.5
+    y: 4.5
+  J5:
+    name: "East Junction"
+    type: "junction"
+    x: 8.0
+    y: 5.5
+  J6:
+    name: "Southwest Junction"
+    type: "junction"
+    x: 3.0
+    y: 2.0
+  J7:
+    name: "South Central Hub"
+    type: "junction"
+    x: 5.5
+    y: 2.5
+  J8:
+    name: "Southeast Junction"
+    type: "junction"
+    x: 7.0
+    y: 3.5
+
+roads:
+  - u: "CBB"
+    v: "J1"
+    name: "Northern Expressway West"
+    distance_km: 4.2
+    speed_kmh: 55.0
+    delay_factor: 1.0
+
+  - u: "CBB"
+    v: "J2"
+    name: "Northern Expressway East"
+    distance_km: 4.1
+    speed_kmh: 55.0
+    delay_factor: 1.0
+
+  - u: "CBB"
+    v: "J4"
+    name: "Central Arterial North"
+    distance_km: 7.0
+    speed_kmh: 40.0
+    delay_factor: 1.0
+
+  - u: "H1"
+    v: "J1"
+    name: "Hospital Way North"
+    distance_km: 3.6
+    speed_kmh: 45.0
+    delay_factor: 1.0
+
+  - u: "H1"
+    v: "J3"
+    name: "City West Corridor"
+    distance_km: 4.1
+    speed_kmh: 45.0
+    delay_factor: 1.0
+
+  - u: "H2"
+    v: "J2"
+    name: "St. Mary Access"
+    distance_km: 2.8
+    speed_kmh: 40.0
+    delay_factor: 1.0
+
+  - u: "H2"
+    v: "J5"
+    name: "Highland Parkway"
+    distance_km: 6.0
+    speed_kmh: 50.0
+    delay_factor: 1.0
+
+  - u: "J2"
+    v: "J5"
+    name: "Eastern Bypass North"
+    distance_km: 4.5
+    speed_kmh: 55.0
+    delay_factor: 1.0
+
+  - u: "J1"
+    v: "J3"
+    name: "Western Ring Road"
+    distance_km: 7.6
+    speed_kmh: 55.0
+    delay_factor: 1.0
+
+  - u: "J3"
+    v: "J4"
+    name: "Midtown Connector"
+    distance_km: 6.1
+    speed_kmh: 35.0
+    delay_factor: 1.0
+
+  - u: "J3"
+    v: "H4"
+    name: "Govt Hospital Link"
+    distance_km: 6.0
+    speed_kmh: 40.0
+    delay_factor: 1.0
+
+  - u: "J3"
+    v: "J6"
+    name: "River Road West"
+    distance_km: 6.7
+    speed_kmh: 45.0
+    delay_factor: 1.0
+
+  - u: "J4"
+    v: "H5"
+    name: "Children's Access Ave"
+    distance_km: 2.2
+    speed_kmh: 35.0
+    delay_factor: 1.0
+
+  - u: "H5"
+    v: "J5"
+    name: "Central-East Link"
+    distance_km: 5.1
+    speed_kmh: 40.0
+    delay_factor: 1.0
+
+  - u: "J4"
+    v: "J7"
+    name: "Southbound Spine"
+    distance_km: 4.5
+    speed_kmh: 45.0
+    delay_factor: 1.0
+
+  - u: "J5"
+    v: "J8"
+    name: "Eastern Bypass Central"
+    distance_km: 4.5
+    speed_kmh: 50.0
+    delay_factor: 1.0
+
+  - u: "J5"
+    v: "H3"
+    name: "Apollo Metro Link"
+    distance_km: 4.5
+    speed_kmh: 45.0
+    delay_factor: 1.0
+
+  - u: "H3"
+    v: "J8"
+    name: "Apollo South Way"
+    distance_km: 4.0
+    speed_kmh: 45.0
+    delay_factor: 1.0
+
+  - u: "H4"
+    v: "J6"
+    name: "Medical Campus Drive"
+    distance_km: 3.0
+    speed_kmh: 40.0
+    delay_factor: 1.0
+
+  - u: "J6"
+    v: "J7"
+    name: "South Cross Road"
+    distance_km: 5.1
+    speed_kmh: 45.0
+    delay_factor: 1.0
+
+  - u: "J7"
+    v: "J8"
+    name: "Tech Park Avenue"
+    distance_km: 3.6
+    speed_kmh: 50.0
+    delay_factor: 1.0
+
+  - u: "J7"
+    v: "RBB"
+    name: "Reserve Bank Approach West"
+    distance_km: 4.5
+    speed_kmh: 45.0
+    delay_factor: 1.0
+
+  - u: "J8"
+    v: "RBB"
+    name: "Reserve Bank Approach North"
+    distance_km: 4.1
+    speed_kmh: 45.0
+    delay_factor: 1.0
+
+# Urgency Scoring Weights (default, configurable via UI)
+urgency_weights:
+  w1_urgency_level: 0.35
+  w2_time_to_need: 0.25
+  w3_deficit_ratio: 0.15
+  w4_blood_type_rarity: 0.15
+  w5_waiting_time: 0.10
+
+# Blood Type Rarity Weights (O- is universal donor RBC, highly scarce)
+rarity_scores:
+  "O-": 1.00
+  "AB-": 0.90
+  "B-": 0.80
+  "A-": 0.70
+  "O+": 0.50
+  "B+": 0.40
+  "A+": 0.35
+  "AB+": 0.20
+
+# Cold Chain Rules & Thresholds
+safety_rules:
+  temp_min_celsius: 1.0
+  temp_max_celsius: 10.0
+  breach_consecutive_readings: 3
+  normal_temp_mean_celsius: 4.0
+  normal_temp_std_celsius: 0.3
