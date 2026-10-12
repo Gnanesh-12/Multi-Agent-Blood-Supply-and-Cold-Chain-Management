@@ -1,353 +1,343 @@
-"""Streamlit Web Application: Multi-Agent Blood Supply & Cold-Chain Management.
+"""Streamlit Web Application: Multi-Agent Blood Supply and Cold-Chain Management.
 
-Foundations of AI Case Study Interactive Demo.
-Adheres strictly to the architectural boundary: app.py contains UI layer only.
+Presentation layer for multi-agent blood supply and cold-chain operations.
+Follows clinical, information-first operational console guidelines.
 """
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-import pandas as pd
+from typing import Any, Dict, List, Optional
 import streamlit as st
 
 from src.blood import BloodType
 from src.simulation import SimulationEngine
-from src.planning.astar import astar_search, dijkstra_search
-from src.ui_helpers import (
+from src.ui.components import (
+    format_agent_name,
+    format_enum_label,
+    render_topbar,
+    render_kpi_strip,
+    render_breach_banner,
+    render_incoming_requests,
+    render_central_stock_bars,
+    render_deliveries_list,
+    render_allocation_table,
+    render_message_log_table,
+    status_pill,
+)
+from src.ui.plot_theme import (
     build_city_map_figure,
-    build_inventory_figure,
-    build_message_timeline_figure,
     build_temperature_telemetry_figure,
+    build_message_timeline_figure,
 )
 
 # Page configuration
 st.set_page_config(
-    page_title="Multi-Agent Blood Supply & Cold-Chain Management",
-    page_icon="🩸",
+    page_title="Multi-Agent Blood Supply and Cold-Chain Management",
+    page_icon=None,
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# Custom CSS for dark glassmorphism styling
-st.markdown(
-    """
-    <style>
-    /* Completely eliminate top whitespace on main page and sidebar */
-    header[data-testid="stHeader"] {
-        display: none !important;
-    }
-    .main .block-container,
-    div[data-testid="stMainBlockContainer"],
-    .block-container {
-        padding-top: 0.5rem !important;
-        padding-bottom: 1.5rem !important;
-        margin-top: 0rem !important;
-    }
-    [data-testid="stSidebarHeader"] {
-        display: none !important;
-        height: 0rem !important;
-        padding: 0rem !important;
-    }
-    [data-testid="stSidebarContent"] {
-        padding-top: 0.5rem !important;
-    }
-    [data-testid="stSidebarUserContent"],
-    section[data-testid="stSidebar"] .block-container {
-        padding-top: 0.5rem !important;
-        margin-top: 0rem !important;
-    }
-    section[data-testid="stSidebar"] {
-        padding-top: 0rem !important;
-    }
-    h1, h2, h3, h4 {
-        margin-top: 0rem !important;
-        padding-top: 0rem !important;
-    }
-
-    /* Metric Card Styling */
-    .metric-card {
-        background: linear-gradient(135deg, rgba(26, 34, 53, 0.7) 0%, rgba(15, 23, 42, 0.9) 100%);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 12px;
-        padding: 14px 18px;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-        transition: transform 0.2s ease, border-color 0.2s ease;
-    }
-    .metric-card:hover {
-        transform: translateY(-2px);
-        border-color: rgba(255, 51, 102, 0.4);
-    }
-    .metric-val {
-        font-size: 26px;
-        font-weight: 700;
-        color: #F8FAFC;
-        margin-top: 2px;
-    }
-    .metric-title {
-        font-size: 11px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: #94A3B8;
-    }
-    /* Badges */
-    .badge-emergency { background-color: #EF4444; color: #FFFFFF; padding: 2px 8px; border-radius: 6px; font-weight: 600; font-size: 11px; }
-    .badge-urgent { background-color: #F59E0B; color: #FFFFFF; padding: 2px 8px; border-radius: 6px; font-weight: 600; font-size: 11px; }
-    .badge-routine { background-color: #3B82F6; color: #FFFFFF; padding: 2px 8px; border-radius: 6px; font-weight: 600; font-size: 11px; }
-    .badge-fulfilled { background-color: #10B981; color: #FFFFFF; padding: 2px 8px; border-radius: 6px; font-weight: 600; font-size: 11px; }
-    .badge-partial { background-color: #F59E0B; color: #FFFFFF; padding: 2px 8px; border-radius: 6px; font-weight: 600; font-size: 11px; }
-    .badge-refused { background-color: #DC2626; color: #FFFFFF; padding: 2px 8px; border-radius: 6px; font-weight: 600; font-size: 11px; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+# Load design tokens and styles from assets/style.css
+CSS_PATH = Path(__file__).resolve().parent / "assets" / "style.css"
+if CSS_PATH.exists():
+    with open(CSS_PATH, "r", encoding="utf-8") as f:
+        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
 # Initialize SimulationEngine in session_state
 CONFIG_PATH = Path(__file__).resolve().parent / "config" / "city.yaml"
 if "engine" not in st.session_state:
-    st.session_state["engine"] = SimulationEngine(CONFIG_PATH, random_seed=42)
+    engine_inst = SimulationEngine(CONFIG_PATH, random_seed=42)
+    engine_inst.load_preset_scenario("1. Single Routine Request")
+    st.session_state["engine"] = engine_inst
 
 engine: SimulationEngine = st.session_state["engine"]
 
 if "active_modal_hospital" not in st.session_state:
     st.session_state["active_modal_hospital"] = None
 
+if "current_scenario_name" not in st.session_state:
+    st.session_state["current_scenario_name"] = "1. Single Routine Request"
 
-# Dialog definition for Blood Requirement Form
-@st.dialog("Blood Requirement Order")
-def open_requirement_dialog(hospital_id: str):
+if "dismissed_banners" not in st.session_state:
+    st.session_state["dismissed_banners"] = set()
+
+if "last_breach_alert" not in st.session_state:
+    st.session_state["last_breach_alert"] = None
+
+
+# Dialog definition for Hospital Blood Requirement Form
+def open_requirement_dialog(hospital_id: str) -> None:
     h_agent = engine.hospitals.get(hospital_id)
     if not h_agent:
-        st.error(f"Hospital {hospital_id} not found.")
         return
 
-    st.markdown(f"### 🏥 {h_agent.name} (`{hospital_id}`)")
-    st.caption(f"Bed Capacity: {h_agent.bed_capacity} beds | Current Clock: {engine.current_time:.1f} min")
+    @st.dialog(f"New blood request · {h_agent.name}")
+    def _render_dialog() -> None:
+        st.caption(f"Bed capacity: {h_agent.bed_capacity} beds &middot; Station clock: T+{engine.current_time:.1f} min")
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        blood_type = st.selectbox(
-            "Blood Type Required",
-            [bt.value for bt in BloodType],
-            index=0,
-            help="Select recipient blood type needed for transfusion",
-        )
-        units = st.slider("Units Required", min_value=1, max_value=10, value=2)
-        urgency = st.selectbox(
-            "Clinical Urgency Level",
-            ["Emergency", "Urgent", "Routine"],
-            index=0,
-            help="Emergency (score 3.0), Urgent (2.0), Routine (1.0)",
-        )
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.markdown('<div class="section-label">Blood type</div>', unsafe_allow_html=True)
+            chosen_bt = st.pills(
+                "Blood type",
+                [bt.value.replace("-", "−") for bt in BloodType],
+                default="O+",
+                label_visibility="collapsed",
+            )
+            if not chosen_bt:
+                chosen_bt = "O+"
+            blood_type = chosen_bt.replace("−", "-")
 
-    with col_b:
-        time_to_need = st.number_input(
-            "Time to Need / Surgery (minutes)",
-            min_value=5,
-            max_value=240,
-            value=25,
-            step=5,
-            help="Minutes remaining until surgical procedure begins",
-        )
-        reason = st.selectbox(
-            "Clinical Indication",
-            ["Surgery", "Trauma", "Transfusion", "Other"],
-            index=0,
-        )
+            st.markdown('<div class="section-label">Units required</div>', unsafe_allow_html=True)
+            units = st.number_input(
+                "Units required",
+                min_value=1,
+                max_value=20,
+                value=2,
+                step=1,
+                label_visibility="collapsed",
+                help="Units of whole red blood cells needed",
+            )
 
-    # Show current local stock for this blood type
-    curr_stock = h_agent.get_stock(blood_type)
-    target_stock = h_agent.get_target(blood_type)
-    st.info(f"Hospital Inventory of **{blood_type}**: **{curr_stock}** units (Target: {target_stock} units)")
+            st.markdown('<div class="section-label">Clinical urgency</div>', unsafe_allow_html=True)
+            urgency = st.radio(
+                "Clinical urgency",
+                ["Emergency", "Urgent", "Routine"],
+                captions=[
+                    "Life-threatening, needed within 30 min",
+                    "High risk, required within 60 min",
+                    "Elective or scheduled transfusion",
+                ],
+                index=0,
+                label_visibility="collapsed",
+            )
 
-    if st.button("🚀 Submit Request to Central Blood Bank", type="primary", use_container_width=True):
-        req = engine.submit_hospital_request(
-            hospital_id=hospital_id,
-            blood_type=blood_type,
-            units=units,
-            urgency_level=urgency,
-            time_to_need_minutes=float(time_to_need),
-            reason=reason,
-        )
-        st.session_state["active_modal_hospital"] = None
-        st.toast(f"Requirement {req.request_id} submitted by {h_agent.name}!", icon="🩸")
-        st.rerun()
+        with col_b:
+            st.markdown('<div class="section-label">Required within</div>', unsafe_allow_html=True)
+            time_to_need = st.number_input(
+                "Required within (minutes)",
+                min_value=5,
+                max_value=240,
+                value=25,
+                step=5,
+                label_visibility="collapsed",
+                help="Minutes remaining until surgical procedure begins",
+            )
+
+            st.markdown('<div class="section-label">Clinical indication</div>', unsafe_allow_html=True)
+            reason = st.selectbox(
+                "Clinical indication",
+                [
+                    "Emergency surgery",
+                    "Trauma resuscitation",
+                    "Elective surgical support",
+                    "Obstetric hemorrhage",
+                    "Transfusion medicine",
+                    "Other clinical indication",
+                ],
+                index=0,
+                label_visibility="collapsed",
+            )
+
+            # Local hospital inventory indication
+            curr_stock = h_agent.get_stock(blood_type)
+            target_stock = h_agent.get_target(blood_type)
+            st.markdown(
+                f"""
+                <div style="background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; margin-top: 18px; font-size: 12px;">
+                    <div style="color: var(--ink-2); margin-bottom: 2px;">Local inventory ({blood_type}):</div>
+                    <div><b class="mono">{curr_stock}</b> units available &middot; Target: <span class="mono">{target_stock}</span> units</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        # Inline validation
+        units_valid = 1 <= units <= 20
+        if not units_valid:
+            st.error("Units must be between 1 and 20.")
+
+        st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+        if st.button("Send to Central Bank", type="primary", use_container_width=True, disabled=not units_valid):
+            req = engine.submit_hospital_request(
+                hospital_id=hospital_id,
+                blood_type=blood_type,
+                units=int(units),
+                urgency_level=urgency,
+                time_to_need_minutes=float(time_to_need),
+                reason=reason,
+            )
+            st.session_state["active_modal_hospital"] = None
+            st.toast(f"Request {req.request_id} sent to Central Bank")
+            st.rerun()
+
+    _render_dialog()
+
+
+# Check for active breach alerts to generate notifications
+breached_vehicles = [
+    d for d in engine.delivery_agents.values()
+    if d.is_quarantined
+    or (
+        d.is_accepted
+        and not d.is_completed
+        and (d.current_temp < float(engine.rule_engine.t_min) or d.current_temp > float(engine.rule_engine.t_max))
+    )
+]
+active_breach_banner_text: Optional[str] = None
+if breached_vehicles:
+    first_breached = breached_vehicles[0]
+    unit_id = first_breached.cargo_units[0].unit_id if first_breached.cargo_units else "U-CBB-ON-01"
+    active_breach_banner_text = (
+        f"{first_breached.agent_id} temperature out of range ({first_breached.current_temp:.1f} °C) — "
+        f"unit {unit_id} quarantined, backup requested from Reserve Bank."
+    )
+    if st.session_state["last_breach_alert"] != first_breached.agent_id:
+        st.session_state["last_breach_alert"] = first_breached.agent_id
+        st.toast(active_breach_banner_text)
 
 
 # ==========================================
-# SIDEBAR CONTROLS
+# SIDEBAR CONTROLS (Top to bottom, nothing else)
 # ==========================================
 with st.sidebar:
-    st.markdown("## ⚙️ Control Center")
-    st.caption("Metropolis AI Health Logistics Coordinator")
+    # 1. Scenario (selectbox; loads on change) + Reset
+    scenario_options = [
+        "1. Single Routine Request",
+        "2. Two Hospitals Competing for Scarce O-",
+        "3. Mass-Casualty Incident (4 Hospitals)",
+        "4. Temperature Breach Mid-Delivery -> Backup from Reserve",
+        "5. Traffic Jam (A* Dynamic Re-routing)",
+        "6. Stockout -> Compatible Substitution",
+    ]
 
-    # 1. Preset Scenarios
-    st.markdown("### 📋 Preset Scenarios")
-    scenario_choice = st.selectbox(
-        "Select Demo Scenario",
-        [
-            "1. Single Routine Request",
-            "2. Two Hospitals Competing for Scarce O-",
-            "3. Mass-Casualty Incident (4 Hospitals)",
-            "4. Temperature Breach Mid-Delivery -> Backup from Reserve",
-            "5. Traffic Jam (A* Dynamic Re-routing)",
-            "6. Stockout -> Compatible Substitution",
-        ],
-        index=0,
-    )
-    if st.button("📂 Load Preset Scenario", use_container_width=True):
-        engine.load_preset_scenario(scenario_choice)
+    def _on_scenario_change() -> None:
+        selected = st.session_state["scenario_selector"]
+        engine.load_preset_scenario(selected)
+        st.session_state["current_scenario_name"] = selected
         st.session_state["active_modal_hospital"] = None
-        st.toast(f"Loaded scenario: {scenario_choice}", icon="✅")
+        st.session_state["dismissed_banners"].clear()
+        st.session_state["last_breach_alert"] = None
+
+    curr_idx = 0
+    if st.session_state["current_scenario_name"] in scenario_options:
+        curr_idx = scenario_options.index(st.session_state["current_scenario_name"])
+
+    st.selectbox(
+        "Scenario",
+        scenario_options,
+        index=curr_idx,
+        key="scenario_selector",
+        on_change=_on_scenario_change,
+    )
+
+    if st.button("Reset", use_container_width=True):
+        engine.reset()
+        st.session_state["active_modal_hospital"] = None
+        st.session_state["dismissed_banners"].clear()
+        st.session_state["last_breach_alert"] = None
         st.rerun()
 
-    st.markdown("---")
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
-    # 2. Simulation Execution Buttons
-    st.markdown("### ⏯️ Simulation Controls")
-    btn_col1, btn_col2 = st.columns(2)
-    with btn_col1:
-        if st.button("🎯 Run Allocation", type="primary", use_container_width=True, help="Run greedy priority allocation on pending requests"):
-            engine.run_allocation()
-            st.rerun()
-    with btn_col2:
-        if st.button("⏱️ Step (+1 min)", use_container_width=True, help="Advance simulation by 1 minute"):
+    # 2. Run allocation (primary)
+    pending_list = engine.central_bank.pending_requests if engine.central_bank else []
+    has_pending = len(pending_list) > 0
+    if st.button(
+        "Run allocation",
+        type="primary",
+        use_container_width=True,
+        disabled=not has_pending,
+        help="Add at least one request first" if not has_pending else "Run greedy priority allocation on pending requests",
+    ):
+        engine.run_allocation()
+        st.rerun()
+
+    # 3. Step 1 min, Run to end (side by side; short labels must not truncate)
+    col_s1, col_s2 = st.columns(2)
+    with col_s1:
+        if st.button("Step 1 min", use_container_width=True, help="Advance simulation by 1 minute"):
             engine.step(1.0)
             st.rerun()
-
-    run_comp_col, reset_col = st.columns(2)
-    with run_comp_col:
-        if st.button("⏩ Complete", use_container_width=True, help="Run until all deliveries finish"):
+    with col_s2:
+        if st.button("Run to end", use_container_width=True, help="Run simulation until all deliveries complete"):
             engine.run_until_idle(max_steps=80)
             st.rerun()
-    with reset_col:
-        if st.button("🔄 Reset", use_container_width=True, help="Reset simulation to initial state"):
-            engine.reset()
-            st.session_state["active_modal_hospital"] = None
-            st.rerun()
 
-    st.markdown(f"**Simulation Clock:** `{engine.current_time:.1f}` minutes elapsed")
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
-    # 3. Urgency Scoring Weights
-    with st.expander("⚖️ Urgency Scoring Weights", expanded=False):
-        st.caption("Urgency Score = w1·Urgency + w2·(1/Time) + w3·Deficit + w4·Rarity + w5·Waiting")
-        w1 = st.slider("w1: Urgency Level", 0.0, 1.0, float(engine.city_network.urgency_weights.get("w1_urgency_level", 0.35)), 0.05)
-        w2 = st.slider("w2: Time-to-Need (1/t)", 0.0, 1.0, float(engine.city_network.urgency_weights.get("w2_time_to_need", 0.25)), 0.05)
-        w3 = st.slider("w3: Deficit Ratio", 0.0, 1.0, float(engine.city_network.urgency_weights.get("w3_deficit_ratio", 0.15)), 0.05)
-        w4 = st.slider("w4: Blood Rarity", 0.0, 1.0, float(engine.city_network.urgency_weights.get("w4_blood_type_rarity", 0.15)), 0.05)
-        w5 = st.slider("w5: Waiting Time (Aging)", 0.0, 1.0, float(engine.city_network.urgency_weights.get("w5_waiting_time", 0.10)), 0.05)
-        engine.city_network.urgency_weights.update({
-            "w1_urgency_level": w1,
-            "w2_time_to_need": w2,
-            "w3_deficit_ratio": w3,
-            "w4_blood_type_rarity": w4,
-            "w5_waiting_time": w5,
-        })
-
-    # 4. Cold Chain Safety Rules & Thresholds
-    with st.expander("🌡️ Cold Chain Thresholds", expanded=False):
-        t_min = st.slider("T_MIN Lower Limit (°C)", -2.0, 4.0, float(engine.rule_engine.t_min), 0.5)
-        t_max = st.slider("T_MAX Upper Limit (°C)", 6.0, 15.0, float(engine.rule_engine.t_max), 0.5)
-        d_consec = st.slider("D Consecutive Breach Readings", 1, 5, int(engine.rule_engine.d_consecutive), 1)
-        engine.rule_engine.update_thresholds(t_min, t_max, d_consec)
-
-    # 5. Traffic Jam & Delay Injection
-    with st.expander("🚦 Traffic Conditions", expanded=False):
-        rush_hour = st.toggle("Rush Hour (All Roads 2.0x Delay)", value=False)
-        if rush_hour:
+    # 4. Rush hour (toggle; needed for the A* traffic demo)
+    def _on_rush_hour_change() -> None:
+        if st.session_state["rush_hour_toggle"]:
             engine.city_network.set_all_traffic_delays(2.0)
         else:
-            roads_list = [f"{u} <-> {v}" for u, v in engine.city_network.graph.edges()]
-            chosen_road = st.selectbox("Select Road Edge", roads_list, index=2 if len(roads_list) > 2 else 0)
-            u_sel, v_sel = chosen_road.split(" <-> ")
-            road_delay = st.slider(f"Delay Factor on {chosen_road}", 1.0, 3.5, float(engine.city_network.graph[u_sel][v_sel]["delay_factor"]), 0.25)
-            engine.city_network.set_road_delay(u_sel, v_sel, road_delay)
+            if st.session_state.get("current_scenario_name") == "5. Traffic Jam (A* Dynamic Re-routing)":
+                engine.city_network.set_all_traffic_delays(1.0)
+                engine.city_network.set_road_delay("CBB", "J4", 3.0)
+            else:
+                engine.city_network.set_all_traffic_delays(1.0)
 
-    # 6. Temperature Breach Injection
-    with st.expander("⚠️ Temperature Breach Injection", expanded=False):
-        active_devs = [k for k, d in engine.delivery_agents.items() if not d.is_completed]
-        if active_devs:
-            sel_dev = st.selectbox("Select Active Vehicle", active_devs)
-            b_col1, b_col2 = st.columns(2)
-            with b_col1:
-                if st.button("🔥 Heat Spike (+Hot)", use_container_width=True):
-                    engine.inject_delivery_breach(sel_dev, "HOT")
-                    st.toast(f"Injected heating failure into {sel_dev}!", icon="🔥")
-                    st.rerun()
-            with b_col2:
-                if st.button("❄️ Freeze Fail (-Cold)", use_container_width=True):
-                    engine.inject_delivery_breach(sel_dev, "COLD")
-                    st.toast(f"Injected freezing failure into {sel_dev}!", icon="❄️")
-                    st.rerun()
-        else:
-            st.caption("No active delivery vehicles currently in transit.")
+    st.toggle("Rush hour", key="rush_hour_toggle", on_change=_on_rush_hour_change)
 
-    # 7. Blood Bank Inventory Adjustments
-    with st.expander("🩸 Central Bank Inventory", expanded=False):
-        if engine.central_bank:
-            cbb_counts = engine.central_bank.get_stock_counts()
-            for bt in [BloodType.O_NEG.value, BloodType.O_POS.value, BloodType.A_POS.value, BloodType.B_POS.value]:
-                st.write(f"**{bt}**: {cbb_counts.get(bt, 0)} units available")
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+    # 5. Inject breach: vehicle selectbox + "Inject breach" button (disabled when no vehicle is moving)
+    moving_devs = [k for k, d in engine.delivery_agents.items() if d.is_accepted and not d.is_completed]
+    has_moving = len(moving_devs) > 0
+
+    sel_breach_dev = st.selectbox(
+        "Vehicle for breach",
+        moving_devs if has_moving else ["No vehicle moving"],
+        disabled=not has_moving,
+        label_visibility="collapsed",
+    )
+    if st.button(
+        "Inject breach",
+        disabled=not has_moving,
+        use_container_width=True,
+        help="Inject cold-chain temperature failure into active vehicle",
+    ):
+        if has_moving and sel_breach_dev in moving_devs:
+            engine.inject_delivery_breach(sel_breach_dev, "HOT")
+            st.session_state["dismissed_banners"].discard(f"breach_{sel_breach_dev}")
+            st.toast(f"Injected heating breach into {sel_breach_dev}")
+            st.rerun()
+
+    # 6. Simulation clock T+mm:ss
+    mins = int(engine.current_time)
+    secs = int((engine.current_time * 60) % 60)
+    clock_str = f"T+{mins:02d}:{secs:02d}"
+    st.markdown(
+        f'<div style="font-size:12px; color:var(--ink-2); margin-top:14px;">'
+        f'Simulation clock: <span class="mono" style="font-weight:600; color:var(--ink);">{clock_str}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
 
 # ==========================================
-# MAIN PAGE LAYOUT
+# MAIN PAGE (Single page with no tabs)
 # ==========================================
 
-# 1. Header & Title Banner
-st.markdown("## 🩸 Multi-Agent Blood Supply & Cold-Chain Management")
+# 1. Top bar: "Multi-Agent Blood Supply and Cold-Chain Management" + "Coimbatore region" on the left, the clock on the right.
+render_topbar(engine.current_time)
 
+if active_breach_banner_text:
+    render_breach_banner(active_breach_banner_text, banner_id=f"breach_{st.session_state.get('last_breach_alert', 'active')}")
 
-# 2. Metric Cards Summary Row
+# 2. Four KPIs only:
 metrics = engine.get_summary_metrics()
-m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
+pending_count = len(engine.central_bank.pending_requests) if engine.central_bank else 0
+in_transit_count = sum(1 for d in engine.delivery_agents.values() if d.is_accepted and not d.is_completed)
+render_kpi_strip(metrics, pending_count=pending_count, in_transit_count=in_transit_count)
 
-with m1:
-    st.markdown(
-        f"""<div class="metric-card"><div class="metric-title">Requests Raised</div><div class="metric-val">{metrics['requests_received']}</div></div>""",
-        unsafe_allow_html=True,
-    )
-with m2:
-    st.markdown(
-        f"""<div class="metric-card"><div class="metric-title">Fulfilled</div><div class="metric-val" style="color: #10B981;">{metrics['fulfilled']}</div></div>""",
-        unsafe_allow_html=True,
-    )
-with m3:
-    st.markdown(
-        f"""<div class="metric-card"><div class="metric-title">Partial / Refused</div><div class="metric-val" style="color: #F59E0B;">{metrics['partial_or_refused']}</div></div>""",
-        unsafe_allow_html=True,
-    )
-with m4:
-    st.markdown(
-        f"""<div class="metric-card"><div class="metric-title">Units Delivered</div><div class="metric-val" style="color: #38BDF8;">{metrics['units_delivered']}</div></div>""",
-        unsafe_allow_html=True,
-    )
-with m5:
-    st.markdown(
-        f"""<div class="metric-card"><div class="metric-title">Breached / Quarantined</div><div class="metric-val" style="color: #EF4444;">{metrics['breaches_quarantined']}</div></div>""",
-        unsafe_allow_html=True,
-    )
-with m6:
-    st.markdown(
-        f"""<div class="metric-card"><div class="metric-title">Avg Fulfilment Time</div><div class="metric-val">{metrics['avg_fulfilment_time_mins']} <span style="font-size:14px;color:#94A3B8;">min</span></div></div>""",
-        unsafe_allow_html=True,
-    )
-with m7:
-    st.markdown(
-        f"""<div class="metric-card"><div class="metric-title">Agent Messages</div><div class="metric-val" style="color: #A855F7;">{metrics['total_messages']}</div></div>""",
-        unsafe_allow_html=True,
-    )
+# 3. Map (left, ~60%) | right column: "Requests" list + "Central Bank stock" bars per blood type. Clicking a hospital opens the request form, as before.
+col_map, col_right = st.columns([1.5, 1.0])
 
-st.markdown("<br>", unsafe_allow_html=True)
-
-# 3. Two Columns: City Map (Wide Left) & Pending Requests + Inventory (Right)
-col_left, col_right = st.columns([1.75, 1.25])
-
-with col_left:
-    st.markdown("### 🗺️ City Network & Active Logistics")
-
-    # Bank stock dictionaries for map tooltips
+with col_map:
+    st.markdown('<div class="section-title">Regional Network Map</div>', unsafe_allow_html=True)
     cbb_stock = engine.central_bank.get_stock_counts() if engine.central_bank else {}
     rbb_stock = engine.reserve_bank.get_stock_counts() if engine.reserve_bank else {}
     banks_stock = {
@@ -360,9 +350,9 @@ with col_left:
         hospitals=engine.hospitals,
         banks=banks_stock,
         delivery_agents=engine.delivery_agents,
+        pending_requests=pending_list,
     )
 
-    # Plotly interactive chart with point selection
     selected_data = st.plotly_chart(
         fig_map,
         use_container_width=True,
@@ -371,250 +361,72 @@ with col_left:
         key="city_network_map",
     )
 
-    # Handle map point click to open modal dialog
     if selected_data and "selection" in selected_data and selected_data["selection"].get("points"):
-        clicked_points = selected_data["selection"]["points"]
-        for pt in clicked_points:
+        for pt in selected_data["selection"]["points"]:
             cdata = pt.get("customdata")
             if cdata and cdata in engine.hospitals:
                 st.session_state["active_modal_hospital"] = cdata
                 break
 
-    # Quick Select Buttons Row for effortless modal launch
-    st.caption("💡 Click on any hospital above, or use quick access:")
-    h_btns = st.columns(5)
+    st.markdown(
+        '<div class="hint-text">Click a hospital to raise a blood request.</div>',
+        unsafe_allow_html=True,
+    )
+
+    # Fast hospital selection row
+    h_cols = st.columns(len(engine.hospitals))
     for idx, (h_id, h_agent) in enumerate(engine.hospitals.items()):
-        with h_btns[idx]:
-            if st.button(f"🏥 {h_agent.name}", key=f"quick_btn_{h_id}", use_container_width=True):
+        with h_cols[idx]:
+            if st.button(h_agent.name, key=f"quick_btn_{h_id}", use_container_width=True):
                 st.session_state["active_modal_hospital"] = h_id
                 st.rerun()
 
-    # Trigger active modal if requested
-    if st.session_state.get("active_modal_hospital"):
-        open_requirement_dialog(st.session_state["active_modal_hospital"])
-
 with col_right:
-    st.markdown("### 📋 Pending Requests Queue")
-    pending_list = engine.central_bank.pending_requests if engine.central_bank else []
+    st.markdown('<div class="section-title">Requests</div>', unsafe_allow_html=True)
+    render_incoming_requests(pending_list, engine.current_time)
 
-    if pending_list:
-        pending_rows = []
-        for r in pending_list:
-            pending_rows.append({
-                "ID": r.request_id,
-                "Hospital": r.hospital_name,
-                "Blood": r.blood_type,
-                "Units": r.units_requested,
-                "Urgency": r.urgency_level,
-                "Need In": f"{r.time_to_need_minutes:.0f} min",
-            })
-        st.dataframe(pd.DataFrame(pending_rows), use_container_width=True, hide_index=True)
-    else:
-        st.info("No pending requests. Click a hospital to raise a blood requirement.")
+    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Central Bank stock</div>', unsafe_allow_html=True)
+    render_central_stock_bars(cbb_stock, min_level=5)
 
-    st.markdown("### 🏦 Blood Bank Inventories")
-    fig_inv = build_inventory_figure(cbb_stock, rbb_stock)
-    st.plotly_chart(fig_inv, use_container_width=True)
+if st.session_state.get("active_modal_hospital"):
+    open_requirement_dialog(st.session_state["active_modal_hospital"])
 
-st.markdown("---")
-
-# 4. Allocation Decision Table
-st.markdown("### ⚖️ Multi-Criteria Allocation Decisions")
+# 4. "Allocation result": the decision table (rank, hospital, type, requested, allocated, score, outcome, reason) + the one-line plain-English explanation. Hide it until allocation has run.
 if engine.allocation_history:
-    alloc_rows = []
-    for d in engine.allocation_history:
-        b = d.score_breakdown
-        alloc_rows.append({
-            "Rank": d.rank,
-            "Request ID": d.request_id,
-            "Hospital": d.hospital_name,
-            "Type Requested": d.blood_type_requested,
-            "Requested": d.units_requested,
-            "Allocated": d.units_allocated,
-            "Substitution": d.substituted_type if d.substituted_type else "None (Exact)",
-            "Score Breakdown": f"U={b.urgency_term:.2f} | 1/T={b.time_to_need_term:.2f} | D={b.deficit_term:.2f} | R={b.rarity_term:.2f} | W={b.waiting_term:.2f}",
-            "Total Score": b.total_score,
-            "Outcome": d.outcome.value,
-            "Clinical Decision Reason": d.reason,
-        })
-    df_alloc = pd.DataFrame(alloc_rows)
-    st.dataframe(df_alloc, use_container_width=True, hide_index=True)
-else:
-    st.caption("No allocation decisions processed yet. Click **Run Allocation** in the sidebar.")
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Allocation result</div>', unsafe_allow_html=True)
+    render_allocation_table(engine.allocation_history)
 
-st.markdown("---")
+# 5. "Deliveries": one row per vehicle (route, progress, ETA, temperature, status) + the temperature chart. Hide it until a vehicle exists.
+has_vehicles = any(d.is_accepted for d in engine.delivery_agents.values())
+if has_vehicles:
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Deliveries</div>', unsafe_allow_html=True)
+    render_deliveries_list(engine.delivery_agents, engine.city_network)
 
-# 5. Active Deliveries & Live Cold Chain Telemetry
-st.markdown("### 🚚 Active Transport Deliveries & Cold Chain Telemetry")
-dev_cols = st.columns([1.3, 1.7])
-
-with dev_cols[0]:
-    st.markdown("#### Vehicle Status Cards")
-    active_vehicles = [d for d in engine.delivery_agents.values() if d.is_accepted and not d.is_completed and d.destination_node]
-    if active_vehicles:
-        for dev in active_vehicles:
-            status_color = "#EF4444" if dev.is_quarantined else ("#F59E0B" if dev.is_backup else "#10B981")
-            status_text = "QUARANTINED" if dev.is_quarantined else ("BACKUP EN ROUTE" if dev.is_backup else "EN ROUTE")
-            units_txt = ", ".join([f"{u.blood_type}" for u in dev.cargo_units])
-            route_str = " → ".join(dev.route)
-
-            # Compare A* vs Dijkstra for this vehicle's route
-            search_a = astar_search(engine.city_network, dev.source_node, dev.destination_node)
-            search_d = dijkstra_search(engine.city_network, dev.source_node, dev.destination_node)
-
-            st.markdown(
-                f"""
-                <div style="background: rgba(22, 27, 34, 0.8); border: 1px solid rgba(255,255,255,0.08); border-left: 4px solid {status_color}; border-radius: 8px; padding: 10px 14px; margin-bottom: 8px;">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <span style="font-weight:700; color:#F8FAFC;">{dev.name}</span>
-                        <span style="background:{status_color}; color:#FFF; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:700;">{status_text}</span>
-                    </div>
-                    <div style="font-size:12px; color:#94A3B8; margin-top:4px;">
-                        <b>Route:</b> {route_str}<br>
-                        <b>Cargo:</b> {len(dev.cargo_units)} units ({units_txt}) | <b>Temp:</b> <span style="color:#FDE047; font-weight:700;">{dev.current_temp:.1f} °C</span> | <b>ETA:</b> {dev.calculate_remaining_eta():.1f} min<br>
-                        <b>A* Algorithm:</b> Expanded <b>{search_a.nodes_expanded}</b> nodes vs Dijkstra <b>{search_d.nodes_expanded}</b> nodes (Cost: {search_a.cost_minutes:.1f} min)
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-    else:
-        st.info("No delivery vehicles currently in transit.")
-
-with dev_cols[1]:
-    st.markdown("#### Live Sensor Telemetry (Safe Band: 1°C – 10°C)")
     fig_temp = build_temperature_telemetry_figure(
         delivery_agents=engine.delivery_agents,
         t_min=float(engine.rule_engine.t_min),
         t_max=float(engine.rule_engine.t_max),
+        current_time=engine.current_time,
     )
     st.plotly_chart(fig_temp, use_container_width=True)
 
-st.markdown("---")
+# 6. "Agent messages": the log table with the "Hide routine status updates" toggle on by default, inside an st.expander that is expanded once there are messages. Put the sequence timeline chart in the same expander, above the table.
+msg_records = engine.bus.get_timeline_records()
+all_messages = engine.bus.get_messages()
+has_messages = len(msg_records) > 0
 
-# 6. Message Timeline Sequence Chart
-st.markdown("### 💬 Inter-Agent Message Timeline")
-fig_timeline = build_message_timeline_figure(engine.bus.get_messages())
-st.plotly_chart(fig_timeline, use_container_width=True)
+st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+with st.expander("Agent messages", expanded=has_messages):
+    fig_timeline = build_message_timeline_figure(all_messages)
+    st.plotly_chart(fig_timeline, use_container_width=True)
 
-st.markdown("---")
+    hide_routine = st.toggle("Hide routine status updates", value=True, key="filter_hide_routine")
 
-# 7. Message Log Table & Rule Firings
-tab_msgs, tab_rules, tab_explain = st.tabs(["📜 Message Log", "🛡️ Safety Rule Firings", "🧠 AI Architecture & 'How It Works'"])
-
-with tab_msgs:
-    msg_records = engine.bus.get_timeline_records()
-    if msg_records:
-        # Extract unique conversation IDs and performatives for filters
-        all_conv_ids = sorted(list({r["conversation_id"] for r in msg_records if r["conversation_id"]}))
-        all_perfs = sorted(list({r["performative"] for r in msg_records}))
-
-        # Filter controls
-        f_col1, f_col2, f_col3 = st.columns([2, 2, 2])
-        with f_col1:
-            selected_conv = st.selectbox(
-                "Filter by Conversation ID",
-                options=["All"] + all_conv_ids,
-                key="filter_conv_id",
-            )
-        with f_col2:
-            selected_perf = st.selectbox(
-                "Filter by Performative",
-                options=["All"] + all_perfs,
-                key="filter_performative",
-            )
-        with f_col3:
-            st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-            hide_routine = st.checkbox(
-                "Hide routine status updates",
-                value=False,
-                key="toggle_hide_routine_status",
-            )
-
-        # Filter the records
-        filtered_records = msg_records
-        if hide_routine:
-            filtered_records = [r for r in filtered_records if r["performative"] != "STATUS_UPDATE"]
-        if selected_conv != "All":
-            filtered_records = [r for r in filtered_records if r["conversation_id"] == selected_conv]
-        if selected_perf != "All":
-            filtered_records = [r for r in filtered_records if r["performative"] == selected_perf]
-
-        # Ensure strict causal sorting by (timestamp, sequence_number)
-        filtered_records = sorted(filtered_records, key=lambda r: (r["timestamp"], r["sequence_number"]))
-
-        # Build table dataframe
-        df_msgs = pd.DataFrame([
-            {
-                "Seq #": r["sequence_number"],
-                "Time (min)": f"{r['timestamp']:.1f}",
-                "Sender": r["sender"],
-                "Receiver": r["receiver"],
-                "Performative": r["performative"],
-                "Content Summary": r["summary"],
-                "Conversation ID": r["conversation_id"],
-            }
-            for r in filtered_records
-        ])
-        st.dataframe(df_msgs, use_container_width=True, hide_index=True)
-
-        # Raw payload expander for debugging
-        with st.expander("🔍 Inspect Raw Message Payloads (Debug View)", expanded=False):
-            st.caption("Select a message to inspect its complete underlying JSON payload:")
-            msg_options = {
-                f"#{r['sequence_number']} [{r['performative']}] {r['sender']} → {r['receiver']} (t={r['timestamp']:.1f}m)": r
-                for r in filtered_records
-            }
-            if msg_options:
-                selected_msg_label = st.selectbox("Select message:", list(msg_options.keys()))
-                st.json(msg_options[selected_msg_label]["payload"])
-    else:
-        st.caption("No messages recorded.")
-
-with tab_rules:
-    rule_firings = engine.rule_engine.firings_log
-    if rule_firings:
-        df_rules = pd.DataFrame([
-            {
-                "Time (min)": f"{f.sim_time:.1f}",
-                "Rule ID": f.rule_id,
-                "Target": f.target_id,
-                "Evaluated Condition (Antecedent)": f.condition_description,
-                "Action Taken (Consequent)": f.action_taken,
-                "Severity": f.severity,
-            }
-            for f in reversed(rule_firings)
-        ])
-        st.dataframe(df_rules, use_container_width=True, hide_index=True)
-    else:
-        st.caption("No safety rule violations fired yet. Normal operation.")
-
-with tab_explain:
-    st.markdown(
-        """
-        ### Multi-Agent Foundations of AI System Breakdown
-
-        #### 1. Multi-Criteria Priority Allocation & Greedy Decision Making
-        - **Urgency Scoring Function**:
-          $$\\text{Score} = w_1 \\cdot \\text{Urgency} + w_2 \\cdot \\left(\\frac{1}{\\text{Time to Need}}\\right) + w_3 \\cdot \\text{Deficit Ratio} + w_4 \\cdot \\text{Rarity} + w_5 \\cdot \\text{Waiting Time}$$
-        - **Aging Term ($w_5 \\cdot \\text{Waiting Time}$)**: Prevents starvation of routine cases under continuous emergency contention by progressively boosting priority over time.
-        - **Max-Heap Priority Queue**: Utilizes Python's `heapq` for $O(N \\log N)$ optimal greedy ranking.
-        - **FEFO (First-Expiry-First-Out)**: Units closest to expiration are allocated first to minimize product wastage.
-        - **Compatible Substitution**: If exact blood types are exhausted, strictly medically compatible alternatives (e.g., $O^-$ universal RBC for $A^-$) are substituted.
-
-        #### 2. Hand-Crafted A* Pathfinding vs Dijkstra
-        - **Edge Travel Time**: $\\text{Cost}(u, v) = \\frac{\\text{Distance}_{km}}{\\text{Effective Speed}_{km/h}} \\times 60 \\times \\text{Delay Factor}$.
-        - **Admissible Heuristic**:
-          $$h(n, \\text{Goal}) = \\frac{\\text{Euclidean Distance}(n, \\text{Goal})}{\\text{Max Speed}} \\times 60$$
-          *Admissibility Guarantee*: Straight-line Euclidean distance $\\le$ road network distance, and speed $\\le \\text{Max Speed}$. Therefore $h(n) \\le \\text{True Cost}$, guaranteeing mathematical optimality while pruning search space compared to uninformed Dijkstra.
-
-        #### 3. Horn-Clause Forward-Chaining Safety Rules
-        - **Cold-Chain Rule**:
-          $$\\text{Temp} < T_{min} \\lor \\text{Temp} > T_{max} \\;(\\text{for } \\ge D \\text{ consecutive readings}) \\implies \\text{Quarantine}(\\text{unit}) \\land \\text{BREACH\\_ALERT} \\land \\text{Trigger Backup}$$
-        - **Dual-Bank Backup Sourcing**: Evaluates Central vs Reserve Bank travel times via $A^*$ and stock availability to instantly reroute replacement blood supplies upon cold-chain failure.
-
-        #### 4. FIPA-ACL Agent Interaction Protocol
-        - Agents communicate exclusively via asynchronous messages over a decoupled `MessageBus`.
-        - Formal communicative performatives: `REQUEST`, `PROPOSE`, `ACCEPT`, `REFUSE`, `DISPATCH`, `STATUS_UPDATE`, `BREACH_ALERT`, `QUARANTINE`, `BACKUP_REQUEST`, `DELIVERED`, `ACK`.
-        """
-    )
+    filtered = msg_records
+    if hide_routine:
+        filtered = [r for r in filtered if r["performative"] != "STATUS_UPDATE"]
+    filtered = sorted(filtered, key=lambda r: (r["timestamp"], r["sequence_number"]))
+    render_message_log_table(filtered, hospitals_map=engine.hospitals)
