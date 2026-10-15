@@ -146,7 +146,18 @@ class Message:
             dest = p.get("destination_hospital") or self.receiver
             temp = p.get("temperature")
             temp_str = f" | Temp at arrival {temp:.1f} °C" if temp is not None else ""
-            return f"Delivered {units}x {b_type} to {dest}{temp_str}"
+            deadline_status = p.get("deadline_status")
+            if not deadline_status and "deadline" in p:
+                arr = p.get("delivered_at", self.timestamp)
+                dl = p["deadline"]
+                if arr <= dl:
+                    deadline_status = "On time"
+                else:
+                    late = round(arr - dl, 1)
+                    l_str = f"{int(late)}" if late == int(late) else f"{late}"
+                    deadline_status = f"Late by {l_str} min"
+            status_str = f" ({deadline_status})" if deadline_status else ""
+            return f"Delivered {units}x {b_type} to {dest}{status_str}{temp_str}"
 
         elif perf == Performative.ACK.value:
             units = p.get("accepted_units", 1)

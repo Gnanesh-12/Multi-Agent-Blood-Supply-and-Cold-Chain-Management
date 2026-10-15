@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 from src.blood import BloodType
 from src.city import CityNetwork
 from src.messaging import Message, Performative
+from src.planning.astar import astar_search
 
 # Clinical Theme Color Tokens
 THEME_BG = "#F6F5F2"
@@ -70,39 +71,59 @@ def build_city_map_figure(
     banks: Dict[str, Any],
     delivery_agents: Dict[str, Any],
     pending_requests: Optional[List[Any]] = None,
+    allocation_history: Optional[List[Any]] = None,
+    request_tracking: Optional[Dict[str, Any]] = None,
 ) -> go.Figure:
     """Generate clinical regional network map.
 
     - Background matches --surface (#FFFFFF)
     - No gridlines or axes
-    - Thin grey roads; traffic delay highlighted only on jammed roads
-    - Hospitals: white square with red cross outline
-    - Central Bank: filled red circle with droplet
-    - Reserve Bank: outlined circle
-    - Junctions: tiny dots with no labels
-    - Active route: 3px info-blue line
-    - Breached vehicle: red with pulsing semi-transparent ring
+    - Base grey roads; traffic delay highlighted on jammed/slow roads
+    - Planned delivery paths (queued requests) highlighted in vibrant dashed sapphire with A* route
+    - Active delivery routes highlighted with glowing blue/red multi-layer lines and directional markers
+    - Target hospitals highlighted with pulsating status halo rings and clear delivery/request badges
+    - Vehicle markers with destination labels (e.g. VAN-01 ➔ City General)
+    - Completed routes traced in subtle emerald green
     """
     fig = go.Figure()
 
-    # Calculate open requests per hospital for hover card
+    # 1. Aggregate hospital states (pending requests, active deliveries, completed deliveries)
     open_reqs_per_hospital: Dict[str, int] = {}
+    pending_req_by_hospital: Dict[str, List[Any]] = {}
+
     if pending_requests:
         for r in pending_requests:
-            hid = getattr(r, "hospital_id", None)
+            hid = getattr(r, "hospital_id", None) or (r.get("hospital_id") if isinstance(r, dict) else None)
             if hid:
                 open_reqs_per_hospital[hid] = open_reqs_per_hospital.get(hid, 0) + 1
+                pending_req_by_hospital.setdefault(hid, []).append(r)
 
-    # 1. Active delivery routes
-    active_edges = set()
+    if request_tracking:
+        for r_id, r_info in request_tracking.items():
+            if r_info.get("status") == "PENDING":
+                hid = r_info.get("hospital_id")
+                if hid and hid not in pending_req_by_hospital:
+                    open_reqs_per_hospital[hid] = open_reqs_per_hospital.get(hid, 0) + 1
+                    pending_req_by_hospital.setdefault(hid, []).append(r_info)
+
+    active_deliv_by_hospital: Dict[str, List[Any]] = {}
     for dev in delivery_agents.values():
-        if dev.is_accepted and not dev.is_completed and dev.route:
-            for i in range(len(dev.route) - 1):
-                u = dev.route[i]
-                v = dev.route[i + 1]
-                active_edges.add((min(u, v), max(u, v)))
+        if dev.is_accepted and not dev.is_completed and dev.destination_node:
+            active_deliv_by_hospital.setdefault(dev.destination_node, []).append(dev)
 
-    # 2. Roads (Thin lines, traffic colored only on jammed roads)
+    completed_deliv_by_hospital: Dict[str, List[Any]] = {}
+    for dev in delivery_agents.values():
+        if dev.is_completed and dev.destination_node:
+            completed_deliv_by_hospital.setdefault(dev.destination_node, []).append(dev)
+
+    if request_tracking:
+        for r_id, r_info in request_tracking.items():
+            if r_info.get("status") == "DELIVERED":
+                hid = r_info.get("hospital_id")
+                if hid and hid not in completed_deliv_by_hospital:
+                    completed_deliv_by_hospital.setdefault(hid, []).append(r_info)
+
+    # 2. Roads (Layer 1: Neutral background network)
     for u, v, data in city_net.graph.edges(data=True):
         u_coords = city_net.get_coordinates(u)
         v_coords = city_net.get_coordinates(v)
@@ -110,24 +131,16 @@ def build_city_map_figure(
         dist = data.get("distance_km", 0.0)
         road_name = data.get("name", f"{u}-{v}")
 
-        edge_pair = (min(u, v), max(u, v))
-        is_active = edge_pair in active_edges
-
-        # Base road color: thin neutral grey; only jam gets color
-        if is_active:
-            line_color = STATUS_INFO
-            line_width = 3.0
-            line_dash = "solid"
-        elif delay >= 2.0:
+        if delay >= 2.0:
             line_color = STATUS_CRITICAL  # jammed
-            line_width = 2.0
+            line_width = 2.2
             line_dash = "solid"
         elif delay > 1.2:
             line_color = STATUS_WARN      # moderate delay
             line_width = 2.0
             line_dash = "solid"
         else:
-            line_color = THEME_LINE       # clear road
+            line_color = THEME_LINE       # clear base road
             line_width = 1.2
             line_dash = "solid"
 
@@ -146,7 +159,143 @@ def build_city_map_figure(
             )
         )
 
-    # 3. Junctions (tiny dots with NO labels)
+    # 3. Completed Delivery Traces (Layer 2: Dotted green route paths)
+    for dev in delivery_agents.values():
+        if dev.is_completed and dev.route and len(dev.route) > 1:
+            coords = [city_net.get_coordinates(n) for n in dev.route]
+            route_names = [city_net.get_node(n).name if city_net.get_node(n) else n for n in dev.route]
+            dest_node = city_net.get_node(dev.destination_node)
+            dest_name = dest_node.name if dest_node else dev.destination_node
+            status_text = dev.deadline_status or "Delivered"
+
+            fig.add_trace(
+                go.Scatter(
+                    x=[c[0] for c in coords],
+                    y=[c[1] for c in coords],
+                    mode="lines",
+                    line=dict(width=2.5, color="#059669", dash="dot"),
+                    hoverinfo="text",
+                    hovertext=(
+                        f"<b>Completed Delivery Route: {dev.agent_id}</b><br>"
+                        f"Delivered To: {dest_name} ({dev.destination_node})<br>"
+                        f"Path: {' ➔ '.join(route_names)}<br>"
+                        f"Status: {status_text}"
+                    ),
+                    name="Completed Route",
+                    showlegend=False,
+                )
+            )
+
+    # 4. Planned Delivery Routes for Pending Requests (Layer 3: Dashed sapphire path)
+    active_dests = set(active_deliv_by_hospital.keys())
+    drawn_planned_hospitals = set()
+    for hid, reqs in pending_req_by_hospital.items():
+        if hid not in active_dests and hid not in drawn_planned_hospitals:
+            drawn_planned_hospitals.add(hid)
+            plan = astar_search(city_net, "CBB", hid)
+            if plan and plan.path and len(plan.path) > 1:
+                coords = [city_net.get_coordinates(n) for n in plan.path]
+                route_names = [city_net.get_node(n).name if city_net.get_node(n) else n for n in plan.path]
+                dest_node = city_net.get_node(hid)
+                dest_name = dest_node.name if dest_node else hid
+
+                req_items = []
+                for r in reqs:
+                    u_cnt = getattr(r, "units_requested", None) or (r.get("units_requested") if isinstance(r, dict) else "?")
+                    b_typ = getattr(r, "blood_type", None) or (r.get("blood_type") if isinstance(r, dict) else "?")
+                    req_items.append(f"{u_cnt}x {b_typ}")
+                req_summary = ", ".join(req_items)
+
+                # Outer soft blue halo
+                fig.add_trace(
+                    go.Scatter(
+                        x=[c[0] for c in coords],
+                        y=[c[1] for c in coords],
+                        mode="lines",
+                        line=dict(width=8, color="rgba(37, 99, 235, 0.18)"),
+                        hoverinfo="none",
+                        showlegend=False,
+                    )
+                )
+                # Core dashed route line with diamond waypoint markers
+                fig.add_trace(
+                    go.Scatter(
+                        x=[c[0] for c in coords],
+                        y=[c[1] for c in coords],
+                        mode="lines+markers",
+                        line=dict(width=3.5, color="#2563EB", dash="dash"),
+                        marker=dict(size=6, color="#2563EB", symbol="diamond"),
+                        hoverinfo="text",
+                        hovertext=(
+                            f"<b>Planned Delivery Route (A*)</b><br>"
+                            f"Destination: {dest_name} ({hid})<br>"
+                            f"Planned Path: {' ➔ '.join(route_names)}<br>"
+                            f"Est. Travel Time: {plan.cost_minutes:.1f} min<br>"
+                            f"Queued Request: {req_summary}<br>"
+                            f"<i>Autonomous: Allocates on Step 1 min</i>"
+                        ),
+                        name="Planned Route",
+                        showlegend=False,
+                    )
+                )
+
+    # 5. Active Delivery Routes (Layer 4: Glowing rapid transit path)
+    for dev_id, dev in delivery_agents.items():
+        if dev.is_accepted and not dev.is_completed and dev.route and len(dev.route) > 1:
+            coords = [city_net.get_coordinates(n) for n in dev.route]
+            route_names = [city_net.get_node(n).name if city_net.get_node(n) else n for n in dev.route]
+            dest_node = city_net.get_node(dev.destination_node)
+            dest_name = dest_node.name if dest_node else dev.destination_node
+            units_str = ", ".join([u.blood_type.replace("-", "−") for u in dev.cargo_units])
+            eta = dev.calculate_remaining_eta()
+
+            if dev.is_quarantined:
+                glow_col = "rgba(179, 38, 30, 0.28)"
+                core_col = "#B3261E"
+                status_lbl = "QUARANTINED"
+            elif dev.is_backup:
+                glow_col = "rgba(217, 119, 6, 0.28)"
+                core_col = "#D97706"
+                status_lbl = "BACKUP DISPATCH"
+            else:
+                glow_col = "rgba(29, 112, 184, 0.28)"
+                core_col = "#1D70B8"
+                status_lbl = "RAPID DELIVERY"
+
+            # Outer glow
+            fig.add_trace(
+                go.Scatter(
+                    x=[c[0] for c in coords],
+                    y=[c[1] for c in coords],
+                    mode="lines",
+                    line=dict(width=10, color=glow_col),
+                    hoverinfo="none",
+                    showlegend=False,
+                )
+            )
+            # Core solid line with diamond markers
+            fig.add_trace(
+                go.Scatter(
+                    x=[c[0] for c in coords],
+                    y=[c[1] for c in coords],
+                    mode="lines+markers",
+                    line=dict(width=4.5, color=core_col, dash="solid"),
+                    marker=dict(size=7, color=core_col, symbol="diamond", line=dict(color="#FFFFFF", width=1.5)),
+                    hoverinfo="text",
+                    hovertext=(
+                        f"<b>Active Delivery Path: {dev_id} ({status_lbl})</b><br>"
+                        f"Destination: {dest_name} ({dev.destination_node})<br>"
+                        f"Route: {' ➔ '.join(route_names)}<br>"
+                        f"ETA: {eta:.1f} min &middot; Speed: {dev.speed_kmh} km/h<br>"
+                        f"Cargo: {len(dev.cargo_units)} units ({units_str})<br>"
+                        f"Temp: {dev.current_temp:.1f} °C"
+                    ),
+                    name="Active Route",
+                    showlegend=False,
+                )
+            )
+
+    # 6. Junctions (Layer 5: Tiny neutral dots)
     j_x, j_y, j_hover = [], [], []
     for nid, node in city_net.nodes.items():
         if node.node_type == "junction":
@@ -168,7 +317,7 @@ def build_city_map_figure(
             )
         )
 
-    # 4. Central Bank (Filled red circle with droplet and label)
+    # 7. Blood Banks (Layer 6: Central Bank & Reserve Bank)
     cbb_node = city_net.get_central_bank()
     if cbb_node:
         cbb_stock = banks.get(cbb_node.node_id, {})
@@ -189,7 +338,6 @@ def build_city_map_figure(
             )
         )
 
-    # 5. Reserve Bank (Outlined circle)
     rbb_node = city_net.get_reserve_bank()
     if rbb_node:
         rbb_stock = banks.get(rbb_node.node_id, {})
@@ -210,29 +358,155 @@ def build_city_map_figure(
             )
         )
 
-    # 6. Hospitals (White square with red cross outline)
+    # 8. Hospitals (Layer 7: Halos, Target Badges, Square Markers)
     h_x, h_y, h_labels, h_customdata, h_hover, h_positions = [], [], [], [], [], []
+
     for h_id, h_agent in hospitals.items():
         node = city_net.get_node(h_id)
-        if node:
-            h_x.append(node.x)
-            h_y.append(node.y)
-            h_labels.append(f"{node.name} ({h_id})")
-            h_customdata.append(h_id)
+        if not node:
+            continue
 
-            # Leftmost nodes (like H4 at x=1.5 and H1 at x=2.0) position label to the top right so they never clip
-            if node.x <= 2.5:
-                h_positions.append("top right")
-            elif node.x >= 8.5:
-                h_positions.append("top left")
-            else:
-                h_positions.append("top center")
+        h_x.append(node.x)
+        h_y.append(node.y)
+        h_customdata.append(h_id)
 
-            # Format hover card: "City General (H1)" / "Stock: O− 0 · A+ 4 …" / "Open requests: 1"
-            stock_items = [f"{bt.replace('-', '−')} {h_agent.get_stock(bt)}" for bt in ["O-", "O+", "A+", "B+"]]
-            stock_line = " · ".join(stock_items)
+        # Positioning to prevent boundary clipping
+        if node.x <= 2.5:
+            h_positions.append("top right")
+        elif node.x >= 8.5:
+            h_positions.append("top left")
+        else:
+            h_positions.append("top center")
+
+        # Determine hospital operational status and draw target halo rings
+        active_incoming = active_deliv_by_hospital.get(h_id, [])
+        pending_reqs = pending_req_by_hospital.get(h_id, [])
+        completed_orders = completed_deliv_by_hospital.get(h_id, [])
+
+        stock_items = [f"{bt.replace('-', '−')} {h_agent.get_stock(bt)}" for bt in ["O-", "O+", "A+", "B+"]]
+        stock_line = " · ".join(stock_items)
+
+        if active_incoming:
+            first_dev = active_incoming[0]
+            cargo_str = ", ".join([u.blood_type.replace("-", "−") for u in first_dev.cargo_units])
+            eta = first_dev.calculate_remaining_eta()
+
+            # Target halo ring (Active delivery destination)
+            fig.add_trace(
+                go.Scatter(
+                    x=[node.x],
+                    y=[node.y],
+                    mode="markers",
+                    marker=dict(
+                        size=38,
+                        color="rgba(29, 112, 184, 0.22)",
+                        symbol="circle",
+                        line=dict(color="#1D70B8", width=2.5),
+                    ),
+                    hoverinfo="none",
+                    showlegend=False,
+                )
+            )
+            # Outer pulsing ring
+            fig.add_trace(
+                go.Scatter(
+                    x=[node.x],
+                    y=[node.y],
+                    mode="markers",
+                    marker=dict(
+                        size=52,
+                        color="rgba(29, 112, 184, 0.08)",
+                        symbol="circle",
+                        line=dict(color="#1D70B8", width=1, dash="dot"),
+                    ),
+                    hoverinfo="none",
+                    showlegend=False,
+                )
+            )
+
+            h_labels.append(
+                f"<b>{node.name} ({h_id})</b><br>"
+                f"<span style='color:#1D70B8; font-size:10px; font-weight:600;'>📦 Delivering: {first_dev.agent_id} ({cargo_str})</span>"
+            )
+            h_hover.append(
+                f"<b>{node.name} ({h_id}) - INCOMING DELIVERY</b><br>"
+                f"Vehicle: {first_dev.agent_id} (ETA: {eta:.1f} min)<br>"
+                f"Cargo: {len(first_dev.cargo_units)} units ({cargo_str})<br>"
+                f"Temperature: {first_dev.current_temp:.1f} °C<br>"
+                f"Stock: {stock_line}"
+            )
+
+        elif pending_reqs:
+            req_items = []
+            for r in pending_reqs:
+                u_cnt = getattr(r, "units_requested", None) or (r.get("units_requested") if isinstance(r, dict) else "?")
+                b_typ = getattr(r, "blood_type", None) or (r.get("blood_type") if isinstance(r, dict) else "?")
+                req_items.append(f"{u_cnt}x {b_typ}")
+            req_summary = ", ".join(req_items)
+
+            # Target halo ring (Pending request)
+            fig.add_trace(
+                go.Scatter(
+                    x=[node.x],
+                    y=[node.y],
+                    mode="markers",
+                    marker=dict(
+                        size=36,
+                        color="rgba(217, 119, 6, 0.25)",
+                        symbol="circle",
+                        line=dict(color="#D97706", width=2),
+                    ),
+                    hoverinfo="none",
+                    showlegend=False,
+                )
+            )
+
+            h_labels.append(
+                f"<b>{node.name} ({h_id})</b><br>"
+                f"<span style='color:#D97706; font-size:10px; font-weight:600;'>⏳ Need: {req_summary}</span>"
+            )
+            h_hover.append(
+                f"<b>{node.name} ({h_id}) - PENDING REQUEST</b><br>"
+                f"Requested: {req_summary}<br>"
+                f"Status: Queued at Central Bank (Allocates on Step)<br>"
+                f"Stock: {stock_line}"
+            )
+
+        elif completed_orders:
+            comp = completed_orders[0]
+            status_txt = comp.get("deadline_status") if isinstance(comp, dict) else getattr(comp, "deadline_status", None)
+            status_txt = status_txt or "Delivered"
+
+            # Success ring (Completed delivery)
+            fig.add_trace(
+                go.Scatter(
+                    x=[node.x],
+                    y=[node.y],
+                    mode="markers",
+                    marker=dict(
+                        size=32,
+                        color="rgba(46, 125, 79, 0.20)",
+                        symbol="circle",
+                        line=dict(color="#059669", width=2),
+                    ),
+                    hoverinfo="none",
+                    showlegend=False,
+                )
+            )
+
+            h_labels.append(
+                f"<b>{node.name} ({h_id})</b><br>"
+                f"<span style='color:#059669; font-size:10px; font-weight:600;'>✓ Delivered ({status_txt})</span>"
+            )
+            h_hover.append(
+                f"<b>{node.name} ({h_id}) - DELIVERED</b><br>"
+                f"Delivery Status: {status_txt}<br>"
+                f"Stock: {stock_line}"
+            )
+
+        else:
             open_reqs = open_reqs_per_hospital.get(h_id, 0)
-
+            h_labels.append(f"{node.name} ({h_id})")
             h_hover.append(
                 f"<b>{node.name} ({h_id})</b><br>"
                 f"Stock: {stock_line}<br>"
@@ -240,7 +514,7 @@ def build_city_map_figure(
             )
 
     if h_x:
-        # White square marker with red outline
+        # Hospital base square marker (White with red outline)
         fig.add_trace(
             go.Scatter(
                 x=h_x,
@@ -251,7 +525,7 @@ def build_city_map_figure(
                 textfont=dict(family=FONT_SANS, size=11, color=THEME_INK, weight="bold"),
                 customdata=h_customdata,
                 marker=dict(
-                    size=16,
+                    size=17,
                     color=THEME_SURFACE,
                     symbol="square",
                     line=dict(color=THEME_ACCENT, width=2),
@@ -262,7 +536,7 @@ def build_city_map_figure(
                 showlegend=False,
             )
         )
-        # Inner red cross symbol for unmistakable medical identification
+        # Inner red cross for instant medical recognition
         fig.add_trace(
             go.Scatter(
                 x=h_x,
@@ -280,7 +554,7 @@ def build_city_map_figure(
             )
         )
 
-    # 7. Active Vehicles & Breached Ring
+    # 9. Active Vehicles & Breached Ring (Layer 8)
     v_x, v_y, v_labels, v_hover, v_colors = [], [], [], [], []
     breach_x, breach_y, breach_labels, breach_hover = [], [], [], []
 
@@ -289,24 +563,24 @@ def build_city_map_figure(
             pos_x, pos_y = dev.current_position_coords
             v_x.append(pos_x)
             v_y.append(pos_y)
-            v_labels.append(dev_id)
-
-            units_str = ", ".join([u.blood_type.replace("-", "−") for u in dev.cargo_units])
-            v_color = STATUS_CRITICAL if dev.is_quarantined else STATUS_INFO
-            v_colors.append(v_color)
 
             dest_node = city_net.get_node(dev.destination_node)
             dest_name = dest_node.name if dest_node else dev.destination_node
+            v_labels.append(f"🚐 <b>{dev_id}</b> ➔ {dest_name}")
+
+            units_str = ", ".join([u.blood_type.replace("-", "−") for u in dev.cargo_units])
+            v_color = STATUS_CRITICAL if dev.is_quarantined else (STATUS_WARN if dev.is_backup else "#1D70B8")
+            v_colors.append(v_color)
 
             v_hover.append(
-                f"<b>{dev_id}</b> ({'Quarantined' if dev.is_quarantined else 'En route'})<br>"
-                f"Destination: {dest_name}<br>"
+                f"<b>{dev_id}</b> ({'Quarantined' if dev.is_quarantined else ('Backup' if dev.is_backup else 'En route')})<br>"
+                f"Destination: {dest_name} ({dev.destination_node})<br>"
                 f"Temperature: {dev.current_temp:.1f} °C<br>"
                 f"ETA: {dev.calculate_remaining_eta():.1f} min<br>"
+                f"Speed: {dev.speed_kmh} km/h<br>"
                 f"Cargo: {len(dev.cargo_units)} units ({units_str})"
             )
 
-            # If vehicle is breached/quarantined, add second larger semi-transparent ring
             if dev.is_quarantined:
                 breach_x.append(pos_x)
                 breach_y.append(pos_y)
@@ -321,10 +595,10 @@ def build_city_map_figure(
                 y=breach_y,
                 mode="markers",
                 marker=dict(
-                    size=28,
-                    color="rgba(179, 38, 30, 0.22)",
+                    size=32,
+                    color="rgba(179, 38, 30, 0.28)",
                     symbol="circle",
-                    line=dict(color=THEME_ACCENT, width=1.5),
+                    line=dict(color=THEME_ACCENT, width=2),
                 ),
                 hoverinfo="text",
                 hovertext=breach_hover,
@@ -340,13 +614,13 @@ def build_city_map_figure(
                 y=v_y,
                 mode="markers+text",
                 text=v_labels,
-                textposition="bottom right",
-                textfont=dict(family=FONT_MONO, size=10, color=THEME_INK, weight="bold"),
+                textposition="bottom center",
+                textfont=dict(family=FONT_SANS, size=11, color=THEME_INK, weight="bold"),
                 marker=dict(
-                    size=13,
+                    size=15,
                     color=v_colors,
                     symbol="circle",
-                    line=dict(color=THEME_SURFACE, width=2),
+                    line=dict(color=THEME_SURFACE, width=2.5),
                 ),
                 hoverinfo="text",
                 hovertext=v_hover,
@@ -355,6 +629,18 @@ def build_city_map_figure(
             )
         )
 
+    # 10. Map Legend Annotation
+    fig.add_annotation(
+        text="<b>Map Legend:</b> <span style='color:#1D70B8;'>━━</span> Active Route &middot; <span style='color:#2563EB;'>- -</span> Planned Path (Queued) &middot; <span style='color:#059669;'>···</span> Delivered &middot; <span style='color:#B3261E;'>━━</span> Jam / Breach",
+        xref="paper",
+        yref="paper",
+        x=0.0,
+        y=1.03,
+        showarrow=False,
+        font=dict(family=FONT_SANS, size=11, color=THEME_INK_2),
+        align="left",
+    )
+
     # Clean layout with no gridlines or axes, and generous coordinate padding
     all_x = [n.x for n in city_net.nodes.values()]
     all_y = [n.y for n in city_net.nodes.values()]
@@ -362,13 +648,13 @@ def build_city_map_figure(
     min_y, max_y = min(all_y), max(all_y)
     dx = max_x - min_x
     dy = max_y - min_y
-    pad_x = max(dx * 0.16, 2.5)
-    pad_y = max(dy * 0.16, 2.5)
+    pad_x = max(dx * 0.18, 2.5)
+    pad_y = max(dy * 0.18, 2.5)
 
     fig.update_layout(
         paper_bgcolor=THEME_SURFACE,
         plot_bgcolor=THEME_SURFACE,
-        margin=dict(l=15, r=15, t=15, b=15),
+        margin=dict(l=15, r=15, t=25, b=15),
         xaxis=dict(
             showgrid=False,
             zeroline=False,
@@ -381,7 +667,7 @@ def build_city_map_figure(
             showticklabels=False,
             range=[min_y - pad_y, max_y + pad_y],
         ),
-        height=520,
+        height=540,
         hoverlabel=dict(
             bgcolor=THEME_SURFACE,
             bordercolor=THEME_LINE,
@@ -586,6 +872,7 @@ def build_message_timeline_figure(messages: List[Message]) -> go.Figure:
     }
     lane_labels = [agent_display_map.get(lane, lane) for lane in lanes]
 
+    first_msg_time = min([m.timestamp for m in messages], default=0.0)
     max_msg_time = max([m.timestamp for m in messages], default=0.0)
 
     # Plot arrows / connected segments for each message
@@ -625,7 +912,7 @@ def build_message_timeline_figure(messages: List[Message]) -> go.Figure:
             title=dict(text="Time elapsed (min)", font=dict(family=FONT_SANS, size=11, color=THEME_INK_2)),
             showgrid=True,
             gridcolor=THEME_SURFACE_2,
-            range=[0, max(15.0, max_msg_time + 2.0)],
+            range=[first_msg_time, max(first_msg_time + 15.0, max_msg_time + 2.0)],
             tickfont=dict(family=FONT_MONO, size=10, color=THEME_INK_2),
         ),
         yaxis=dict(

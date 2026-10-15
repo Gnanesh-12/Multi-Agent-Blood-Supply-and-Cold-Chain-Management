@@ -189,6 +189,9 @@ class HospitalAgent(BaseAgent):
                     "blood_type": bt,
                     "vehicle": vehicle_id,
                     "time": current_time,
+                    "request_id": req_id,
+                    "deadline": msg.payload.get("deadline"),
+                    "deadline_status": msg.payload.get("deadline_status"),
                 })
 
             # Send single ACK to source bank

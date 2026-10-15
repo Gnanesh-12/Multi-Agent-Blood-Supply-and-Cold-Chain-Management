@@ -91,6 +91,7 @@ class SimulationEngine:
                 vehicle_ids=["VAN-01", "VAN-02"],
             )
             self.central_bank.initialize_inventory(cbb_node.initial_inventory, base_shelf_life_mins=360.0)
+            self.central_bank.on_allocation = self._record_allocation_decisions
 
         # 3. Reserve Blood Bank
         rbb_node = self.city_network.get_reserve_bank()
@@ -162,11 +163,23 @@ class SimulationEngine:
             "units_requested": units,
             "urgency": urgency_level,
             "created_at": self.current_time,
+            "time_to_need": time_to_need_minutes,
+            "deadline": self.current_time + time_to_need_minutes,
             "delivered_at": None,
             "status": "PENDING",
             "allocated": 0,
+            "deadline_status": None,
         }
         return req
+
+    def _record_allocation_decisions(self, decisions: List[AllocationDecision]) -> None:
+        """Record decisions into allocation history and update request tracking."""
+        for d in decisions:
+            if d not in self.allocation_history:
+                self.allocation_history.append(d)
+            if d.request_id in self.request_tracking:
+                self.request_tracking[d.request_id]["allocated"] = d.units_allocated
+                self.request_tracking[d.request_id]["status"] = d.outcome.value
 
     def run_allocation(
         self,
@@ -185,13 +198,7 @@ class SimulationEngine:
             weights=weights,
             rarity_scores=rarity_scores,
         )
-        self.allocation_history.extend(decisions)
-
-        for d in decisions:
-            if d.request_id in self.request_tracking:
-                self.request_tracking[d.request_id]["allocated"] = d.units_allocated
-                self.request_tracking[d.request_id]["status"] = d.outcome.value
-
+        self._record_allocation_decisions(decisions)
         return decisions
 
     def step(self, dt_minutes: Optional[float] = None) -> None:
@@ -248,6 +255,19 @@ class SimulationEngine:
                 if dev.is_completed and dev.request_id in self.request_tracking:
                     self.request_tracking[dev.request_id]["delivered_at"] = self.current_time
                     self.request_tracking[dev.request_id]["status"] = "DELIVERED"
+                    deadline_status = dev.deadline_status
+                    if not deadline_status:
+                        dl = self.request_tracking[dev.request_id].get("deadline", dev.deadline)
+                        if self.current_time <= dl:
+                            deadline_status = "On time"
+                        else:
+                            late = round(self.current_time - dl, 1)
+                            l_str = f"{int(late)}" if late == int(late) else f"{late}"
+                            deadline_status = f"Late by {l_str} min"
+                    self.request_tracking[dev.request_id]["deadline_status"] = deadline_status
+                    for d in self.allocation_history:
+                        if d.request_id == dev.request_id:
+                            d.deadline_status = deadline_status
 
         # Step 3: Agent step execution (Hospitals, Blood Banks)
         for h_agent in self.hospitals.values():
@@ -421,6 +441,34 @@ class SimulationEngine:
         ]
         avg_fulfilment_time = round(sum(deliv_times) / len(deliv_times), 1) if deliv_times else 0.0
 
+        # Deadline tracking metrics
+        delivered_reqs = [
+            r for r in self.request_tracking.values()
+            if r.get("delivered_at") is not None
+        ]
+        on_time_count = sum(
+            1 for r in delivered_reqs
+            if r.get("deadline_status") == "On time"
+            or (r.get("deadline") is not None and r.get("delivered_at", 0) <= r.get("deadline"))
+        )
+        late_reqs = [
+            r for r in delivered_reqs
+            if (r.get("deadline_status") and r.get("deadline_status") != "On time")
+            or (r.get("deadline") is not None and r.get("delivered_at", 0) > r.get("deadline"))
+        ]
+        late_count = len(late_reqs)
+        max_late_mins = max([
+            round(r["delivered_at"] - r["deadline"], 1)
+            for r in late_reqs
+            if r.get("deadline") is not None
+        ], default=0.0)
+        max_late_str = f"{int(max_late_mins)}" if max_late_mins == int(max_late_mins) else f"{max_late_mins}"
+        deadline_kpi_text = ""
+        if late_count > 0:
+            deadline_kpi_text = f"Late by {max_late_str} min"
+        elif on_time_count > 0:
+            deadline_kpi_text = "On time"
+
         total_messages = len(self.bus.history)
 
         return {
@@ -433,4 +481,8 @@ class SimulationEngine:
             "breaches_quarantined": max(quarantined_units, breach_firings),
             "avg_fulfilment_time_mins": avg_fulfilment_time,
             "total_messages": total_messages,
+            "on_time_count": on_time_count,
+            "late_count": late_count,
+            "max_late_mins": max_late_mins,
+            "deadline_kpi_text": deadline_kpi_text,
         }

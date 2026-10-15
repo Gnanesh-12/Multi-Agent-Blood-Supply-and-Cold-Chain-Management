@@ -23,6 +23,7 @@ from src.ui.components import (
     render_deliveries_list,
     render_allocation_table,
     render_message_log_table,
+    render_delivery_route_status_card,
     status_pill,
 )
 from src.ui.plot_theme import (
@@ -242,23 +243,10 @@ with st.sidebar:
 
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
-    # 2. Run allocation (primary)
-    pending_list = engine.central_bank.pending_requests if engine.central_bank else []
-    has_pending = len(pending_list) > 0
-    if st.button(
-        "Run allocation",
-        type="primary",
-        use_container_width=True,
-        disabled=not has_pending,
-        help="Add at least one request first" if not has_pending else "Run greedy priority allocation on pending requests",
-    ):
-        engine.run_allocation()
-        st.rerun()
-
-    # 3. Step 1 min, Run to end (side by side; short labels must not truncate)
+    # 2. Step 1 min, Run to end (side by side; short labels must not truncate)
     col_s1, col_s2 = st.columns(2)
     with col_s1:
-        if st.button("Step 1 min", use_container_width=True, help="Advance simulation by 1 minute"):
+        if st.button("Step 1 min", type="primary", use_container_width=True, help="Advance simulation by 1 minute (auto-allocates pending requests)"):
             engine.step(1.0)
             st.rerun()
     with col_s2:
@@ -329,7 +317,8 @@ if active_breach_banner_text:
 
 # 2. Four KPIs only:
 metrics = engine.get_summary_metrics()
-pending_count = len(engine.central_bank.pending_requests) if engine.central_bank else 0
+pending_list = engine.central_bank.pending_requests if engine.central_bank else []
+pending_count = len(pending_list)
 in_transit_count = sum(1 for d in engine.delivery_agents.values() if d.is_accepted and not d.is_completed)
 render_kpi_strip(metrics, pending_count=pending_count, in_transit_count=in_transit_count)
 
@@ -345,12 +334,22 @@ with col_map:
         "RBB": rbb_stock,
     }
 
+    # Route and destination status callout card
+    render_delivery_route_status_card(
+        delivery_agents=engine.delivery_agents,
+        pending_requests=pending_list,
+        request_tracking=engine.request_tracking,
+        city_network=engine.city_network,
+    )
+
     fig_map = build_city_map_figure(
         city_net=engine.city_network,
         hospitals=engine.hospitals,
         banks=banks_stock,
         delivery_agents=engine.delivery_agents,
         pending_requests=pending_list,
+        allocation_history=engine.allocation_history,
+        request_tracking=engine.request_tracking,
     )
 
     selected_data = st.plotly_chart(
@@ -396,7 +395,7 @@ if st.session_state.get("active_modal_hospital"):
 if engine.allocation_history:
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
     st.markdown('<div class="section-title">Allocation result</div>', unsafe_allow_html=True)
-    render_allocation_table(engine.allocation_history)
+    render_allocation_table(engine.allocation_history, engine.request_tracking)
 
 # 5. "Deliveries": one row per vehicle (route, progress, ETA, temperature, status) + the temperature chart. Hide it until a vehicle exists.
 has_vehicles = any(d.is_accepted for d in engine.delivery_agents.values())

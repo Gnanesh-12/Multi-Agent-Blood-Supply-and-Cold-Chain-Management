@@ -36,6 +36,11 @@ class BloodRequirement:
     current_hospital_stock: int = 0
     target_hospital_stock: int = 5
 
+    @property
+    def deadline(self) -> float:
+        """Clinical deadline = request creation time + time until need."""
+        return self.created_at_sim_time + self.time_to_need_minutes
+
 
 @dataclass
 class ScoreBreakdown:
@@ -61,6 +66,7 @@ class AllocationDecision:
     outcome: AllocationOutcome
     reason: str
     allocated_units: List[BloodUnit] = field(default_factory=list)
+    deadline_status: Optional[str] = None
 
 
 def calculate_urgency_score(

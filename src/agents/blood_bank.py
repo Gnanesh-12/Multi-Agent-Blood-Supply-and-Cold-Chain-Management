@@ -43,9 +43,12 @@ class BloodBankAgent(BaseAgent):
         self.bank_type = bank_type  # "central_bank" or "reserve_bank"
         self.inventory: List[BloodUnit] = []
         self.pending_requests: List[BloodRequirement] = []
+        self.deferred_requests: List[BloodRequirement] = []
         self.request_registry: Dict[str, BloodRequirement] = {}
         self.last_allocation_decisions: List[AllocationDecision] = []
+        self.allocation_history: List[AllocationDecision] = []
         self.active_dispatches: List[Dict[str, Any]] = []
+        self.on_allocation: Optional[Any] = None
 
         # Vehicle pool associated with this bank
         if vehicle_ids:
@@ -177,6 +180,11 @@ class BloodBankAgent(BaseAgent):
             )
 
             # 2. Dispatch vehicle from Reserve Bank
+            orig_req = self.request_registry.get(req_id)
+            req_created = float(p.get("created_at") or (orig_req.created_at_sim_time if orig_req else current_time))
+            req_ttn = float(p.get("time_to_need") or (orig_req.time_to_need_minutes if orig_req else 60.0))
+            deadline = float(p.get("deadline") or (req_created + req_ttn))
+
             self.send(
                 receiver=veh_id,
                 performative=Performative.DISPATCH,
@@ -191,6 +199,9 @@ class BloodBankAgent(BaseAgent):
                     "route": rbb_plan.path,
                     "eta_minutes": rbb_plan.cost_minutes,
                     "is_backup": True,
+                    "created_at": req_created,
+                    "time_to_need": req_ttn,
+                    "deadline": deadline,
                 },
                 timestamp=current_time,
                 conversation_id=req_id,
@@ -258,11 +269,11 @@ class BloodBankAgent(BaseAgent):
                 conversation_id=req_id,
             )
         else:
-            # Non-emergency: mark DEFERRED and re-queue with aging priority bonus
-            if original_req and original_req not in self.pending_requests:
+            # Non-emergency: mark DEFERRED with aging priority bonus for future intake
+            if original_req and original_req not in self.deferred_requests:
                 # Artificial aging bonus to increase priority in next allocation cycle
                 original_req.created_at_sim_time -= 30.0
-                self.pending_requests.append(original_req)
+                self.deferred_requests.append(original_req)
 
             self.send(
                 receiver=dest_hosp,
@@ -270,7 +281,7 @@ class BloodBankAgent(BaseAgent):
                 payload={
                     "request_id": req_id,
                     "status": "DEFERRED",
-                    "reason": "Stock currently unavailable; re-queued with aging priority bonus",
+                    "reason": "Stock currently unavailable; deferred with aging priority bonus",
                 },
                 timestamp=current_time,
                 conversation_id=req_id,
@@ -309,6 +320,11 @@ class BloodBankAgent(BaseAgent):
         # 2. Trigger backup sourcing to deliver replacement units
         # Send BACKUP_REQUEST to peer Reserve Bank
         peer_bank = "RBB" if self.agent_id == "CBB" else "CBB"
+        orig_req = self.request_registry.get(req_id)
+        req_created = orig_req.created_at_sim_time if orig_req else current_time
+        req_ttn = orig_req.time_to_need_minutes if orig_req else 60.0
+        deadline = req_created + req_ttn
+
         self.send(
             receiver=peer_bank,
             performative=Performative.BACKUP_REQUEST,
@@ -319,6 +335,9 @@ class BloodBankAgent(BaseAgent):
                 "units_needed": units_count,
                 "units_count": units_count,
                 "reason": "Emergency replacement for quarantined cold-chain cargo",
+                "created_at": req_created,
+                "time_to_need": req_ttn,
+                "deadline": deadline,
             },
             timestamp=current_time,
             conversation_id=req_id,
@@ -374,10 +393,16 @@ class BloodBankAgent(BaseAgent):
         )
 
         self.last_allocation_decisions = decisions
+        self.allocation_history.extend(decisions)
         self.pending_requests.clear()
 
         # Emit peer-to-peer communicative performatives for each decision in score rank order
         for d in decisions:
+            orig_req = self.request_registry.get(d.request_id)
+            req_created = orig_req.created_at_sim_time if orig_req else current_time
+            req_ttn = orig_req.time_to_need_minutes if orig_req else 60.0
+            deadline = req_created + req_ttn
+
             if d.outcome in (AllocationOutcome.FULFILLED, AllocationOutcome.PARTIAL):
                 # Central Bank fulfilled units!
                 astar_plan = astar_search(self.city_network, self.agent_id, d.hospital_id)
@@ -396,6 +421,7 @@ class BloodBankAgent(BaseAgent):
                         "score": d.score_breakdown.total_score,
                         "vehicle_id": veh_id,
                         "eta_minutes": round(astar_plan.cost_minutes, 1),
+                        "deadline": deadline,
                     },
                     timestamp=current_time,
                     conversation_id=d.request_id,
@@ -417,6 +443,9 @@ class BloodBankAgent(BaseAgent):
                         "eta_minutes": astar_plan.cost_minutes,
                         "rank": d.rank,
                         "total_score": d.score_breakdown.total_score,
+                        "created_at": req_created,
+                        "time_to_need": req_ttn,
+                        "deadline": deadline,
                     },
                     timestamp=current_time,
                     conversation_id=d.request_id,
@@ -424,9 +453,7 @@ class BloodBankAgent(BaseAgent):
             else:
                 # Central Bank has shortfall/stockout: initiate backup sourcing to Reserve Bank before refusal
                 shortfall = d.units_requested - d.units_allocated
-                orig_req = self.request_registry.get(d.request_id)
                 urgency = orig_req.urgency_level if orig_req else "Routine"
-                ttn = orig_req.time_to_need_minutes if orig_req else 60.0
 
                 self.send(
                     receiver="RBB",
@@ -439,13 +466,30 @@ class BloodBankAgent(BaseAgent):
                         "units_needed": shortfall,
                         "units_count": shortfall,
                         "urgency": urgency,
-                        "time_to_need": ttn,
+                        "time_to_need": req_ttn,
+                        "created_at": req_created,
+                        "deadline": deadline,
                     },
                     timestamp=current_time,
                     conversation_id=d.request_id,
                 )
 
+        if self.on_allocation:
+            self.on_allocation(decisions)
+
         return decisions
+
+    def step(self, current_time: float) -> None:
+        """Autonomous agent execution cycle for the current simulation tick:
+        1. Perceive incoming messages and update request queue.
+        2. If central bank and has pending requests, run greedy priority allocation.
+        3. Deliberate and act.
+        """
+        self.perceive(current_time)
+        if self.bank_type == "central_bank" and self.pending_requests:
+            self.run_allocation(current_time)
+        self.decide(current_time)
+        self.act(current_time)
 
     def decide(self, current_time: float) -> Any:
         return None

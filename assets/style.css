@@ -728,3 +728,64 @@ div[data-testid="stPills"] button[aria-checked="true"] {
   font-style: normal;
   margin-top: 4px;
 }
+
+/* Delivery route status card above map */
+.delivery-route-banner {
+  background-color: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.delivery-route-banner.active {
+  border-left: 4px solid #1D70B8;
+  background-color: #F4F8FC;
+}
+
+.delivery-route-banner.pending {
+  border-left: 4px solid #D97706;
+  background-color: #FEF9EC;
+}
+
+.delivery-route-banner.delivered {
+  border-left: 4px solid #059669;
+  background-color: #EDF7EE;
+}
+
+.delivery-route-banner.quarantined {
+  border-left: 4px solid #B3261E;
+  background-color: #FDF2F2;
+}
+
+.delivery-route-banner.idle {
+  border-left: 4px solid #7A7F87;
+  background-color: var(--surface);
+}
+
+.delivery-route-header {
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 3px;
+}
+
+.delivery-route-body {
+  font-size: 12.5px;
+  color: var(--ink);
+  margin-bottom: 3px;
+}
+
+.delivery-route-meta {
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  color: var(--ink-2);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}

@@ -163,6 +163,25 @@ def render_kpi_strip(
     breach_class = "kpi-cell breach-alert" if breaches > 0 else "kpi-cell"
     breach_context = f"{breaches} quarantined" if breaches > 0 else "0 within safe band"
 
+    deadline_text = metrics.get("deadline_kpi_text", "")
+    late_cnt = metrics.get("late_count", 0)
+    on_time_cnt = metrics.get("on_time_count", 0)
+
+    if late_cnt > 0:
+        timing_tag = f'<span style="color:#B3261E; font-weight:600;">{deadline_text}</span>'
+        if in_transit_count > 0:
+            delivery_context = f"{timing_tag} &middot; {in_transit_count} in transit"
+        else:
+            delivery_context = f"{timing_tag} &middot; {delivered} delivered"
+    elif on_time_cnt > 0:
+        timing_tag = '<span style="color:#2E7D4F; font-weight:600;">On time</span>'
+        if in_transit_count > 0:
+            delivery_context = f"{timing_tag} &middot; {in_transit_count} in transit"
+        else:
+            delivery_context = f"{timing_tag} &middot; {delivered} delivered"
+    else:
+        delivery_context = f"{in_transit_count} in transit &middot; {delivered} delivered"
+
     html_code = (
         f'<div class="kpi-strip">'
         f'<div class="kpi-cell">'
@@ -178,7 +197,7 @@ def render_kpi_strip(
         f'<div class="kpi-cell">'
         f'<div class="kpi-label">In Transit / Delivered</div>'
         f'<div class="kpi-value">{in_transit_count} <span style="font-size:16px;font-weight:400;color:var(--ink-2);">/ {delivered}</span></div>'
-        f'<div class="kpi-context">{in_transit_count} in transit · {delivered} delivered</div>'
+        f'<div class="kpi-context">{delivery_context}</div>'
         f'</div>'
         f'<div class="{breach_class}">'
         f'<div class="kpi-label">Breaches</div>'
@@ -396,6 +415,159 @@ def render_deliveries_list(delivery_agents: Dict[str, Any], city_network: Any) -
     render_html(f'<div class="delivery-list">{"".join(rows_html)}</div>')
 
 
+def render_delivery_route_status_card(
+    delivery_agents: Dict[str, Any],
+    pending_requests: Optional[List[Any]] = None,
+    request_tracking: Optional[Dict[str, Any]] = None,
+    city_network: Optional[Any] = None,
+) -> None:
+    """Render prominent clinical Route & Delivery Status card above the map."""
+    active_vehicles = [
+        d for d in delivery_agents.values()
+        if d.is_accepted and not d.is_completed and d.destination_node
+    ]
+
+    pending_list = list(pending_requests or [])
+    if not pending_list and request_tracking:
+        for r in request_tracking.values():
+            if r.get("status") == "PENDING":
+                pending_list.append(r)
+
+    completed_vehicles = [
+        d for d in delivery_agents.values()
+        if d.is_completed and d.destination_node
+    ]
+
+    def node_name(nid: str) -> str:
+        if city_network:
+            node = city_network.get_node(nid)
+            if node:
+                return node.name
+        return AGENT_NAME_MAP.get(nid, nid)
+
+    # 1. Active deliveries en route
+    if active_vehicles:
+        cards_html = []
+        for dev in active_vehicles:
+            dest_name = node_name(dev.destination_node)
+            route_hops = [node_name(n) for n in dev.route] if dev.route else [dest_name]
+            route_str = " ➔ ".join(route_hops)
+            cargo_str = ", ".join([u.blood_type.replace("-", "−") for u in dev.cargo_units])
+            eta = dev.calculate_remaining_eta()
+
+            if dev.is_quarantined:
+                banner_class = "quarantined"
+                title = f"⚠️ Breached Unit Quarantined &middot; {dev.agent_id}"
+                status_note = f"<span style='color:var(--status-critical); font-weight:600;'>TEMP BREACH ({dev.current_temp:.1f} °C)</span> &middot; Backup dispatched"
+            elif dev.is_backup:
+                banner_class = "pending"
+                title = f"🔄 Backup Rapid Dispatch &middot; {dev.agent_id}"
+                status_note = f"<span style='color:var(--status-warn); font-weight:600;'>EMERGENCY BACKUP</span> &middot; Temp: {dev.current_temp:.1f} °C"
+            else:
+                banner_class = "active"
+                title = f"🚐 Active Rapid Delivery &middot; {dev.agent_id}"
+                status_note = f"<span style='color:#1D70B8; font-weight:600;'>EN ROUTE</span> &middot; Temp: {dev.current_temp:.1f} °C (Cold-chain safe)"
+
+            cards_html.append(
+                f'<div class="delivery-route-banner {banner_class}">'
+                f'<div class="delivery-route-header">'
+                f'<span>{title}</span>'
+                f'<span style="font-size:12px; font-weight:normal; color:var(--ink-2);">{status_note}</span>'
+                f'</div>'
+                f'<div class="delivery-route-body">'
+                f'Delivering <b>{len(dev.cargo_units)} units ({cargo_str})</b> to <b>{dest_name} ({dev.destination_node})</b>'
+                f'</div>'
+                f'<div class="delivery-route-meta">'
+                f'<span><b>Active Path:</b> {html.escape(route_str)}</span>'
+                f'<span><b>ETA:</b> {eta:.1f} min</span>'
+                f'<span><b>Speed:</b> {dev.speed_kmh:.0f} km/h</span>'
+                f'</div>'
+                f'</div>'
+            )
+        render_html("".join(cards_html))
+        return
+
+    # 2. Pending requests queued (e.g. at T+00:00 before first step)
+    if pending_list:
+        cards_html = []
+        for req in pending_list:
+            hid = getattr(req, "hospital_id", None) or (req.get("hospital_id") if isinstance(req, dict) else "")
+            h_name = getattr(req, "hospital_name", None) or node_name(hid)
+            units = getattr(req, "units_requested", None) or (req.get("units_requested") if isinstance(req, dict) else 0)
+            b_type = getattr(req, "blood_type", None) or (req.get("blood_type") if isinstance(req, dict) else "")
+            urgency = getattr(req, "urgency_level", None) or (req.get("urgency") if isinstance(req, dict) else "Routine")
+            time_to_need = getattr(req, "time_to_need_minutes", None) or (req.get("time_to_need") if isinstance(req, dict) else 20.0)
+
+            planned_hops = []
+            est_time = 0.0
+            if city_network and hid:
+                from src.planning.astar import astar_search
+                plan = astar_search(city_network, "CBB", hid)
+                if plan and plan.path:
+                    planned_hops = [node_name(n) for n in plan.path]
+                    est_time = plan.cost_minutes
+            route_str = " ➔ ".join(planned_hops) if planned_hops else f"Central Bank ➔ {h_name}"
+
+            cards_html.append(
+                f'<div class="delivery-route-banner pending">'
+                f'<div class="delivery-route-header">'
+                f'<span>⏳ Pending Autonomous Allocation & Dispatch</span>'
+                f'<span style="font-size:12px; font-weight:normal; color:#D97706;">Queued at Central Bank</span>'
+                f'</div>'
+                f'<div class="delivery-route-body">'
+                f'<b>{h_name} ({hid})</b> requested <b>{units} units {b_type.replace("-", "−")}</b> '
+                f'(Urgency: {urgency} &middot; Need in {time_to_need:.0f} min)'
+                f'</div>'
+                f'<div class="delivery-route-meta">'
+                f'<span><b>Planned Path:</b> {html.escape(route_str)}</span>'
+                f'<span><b>Est. Transit:</b> ~{est_time:.1f} min</span>'
+                f'<span style="color:var(--ink); font-weight:600;">Click "Step 1 min" to dispatch</span>'
+                f'</div>'
+                f'</div>'
+            )
+        render_html("".join(cards_html))
+        return
+
+    # 3. Completed deliveries
+    if completed_vehicles:
+        first_comp = completed_vehicles[-1]
+        dest_name = node_name(first_comp.destination_node)
+        route_hops = [node_name(n) for n in first_comp.route] if first_comp.route else [dest_name]
+        route_str = " ➔ ".join(route_hops)
+        status_txt = first_comp.deadline_status or "Delivered"
+        cargo_str = ", ".join([u.blood_type.replace("-", "−") for u in first_comp.cargo_units])
+
+        render_html(
+            f'<div class="delivery-route-banner delivered">'
+            f'<div class="delivery-route-header">'
+            f'<span>✓ Delivery Completed ({html.escape(status_txt)})</span>'
+            f'<span style="font-size:12px; font-weight:normal; color:#059669;">Cold chain verified ({first_comp.current_temp:.1f} °C)</span>'
+            f'</div>'
+            f'<div class="delivery-route-body">'
+            f'Successfully delivered <b>{len(first_comp.cargo_units)} units ({cargo_str})</b> to <b>{dest_name} ({first_comp.destination_node})</b> via {first_comp.agent_id}'
+            f'</div>'
+            f'<div class="delivery-route-meta">'
+            f'<span><b>Delivered Path:</b> {html.escape(route_str)}</span>'
+            f'<span><b>Final Status:</b> {html.escape(status_txt)}</span>'
+            f'</div>'
+            f'</div>'
+        )
+        return
+
+    # 4. Network Idle
+    render_html(
+        f'<div class="delivery-route-banner idle">'
+        f'<div class="delivery-route-header">'
+        f'<span>🟢 Fleet Standing By &middot; No Active Deliveries</span>'
+        f'<span style="font-size:12px; font-weight:normal; color:var(--ink-2);">Central Bank Fleet Available</span>'
+        f'</div>'
+        f'<div class="delivery-route-body" style="color:var(--ink-2);">'
+        f'Select a scenario in the sidebar or click any hospital node on the map to submit a blood request.'
+        f'</div>'
+        f'</div>'
+    )
+
+
 def generate_allocation_summary(decisions: List[AllocationDecision]) -> str:
     """Generate a one-sentence plain-English explanation under the allocation table."""
     if not decisions:
@@ -424,12 +596,15 @@ def generate_allocation_summary(decisions: List[AllocationDecision]) -> str:
     return f"Processed {total} requirements: {fulfilled} fulfilled under multi-criteria priority scoring."
 
 
-def render_allocation_table(decisions: List[AllocationDecision]) -> None:
-    """Render allocation decision table with score breakdown bars and plain explanation."""
+def render_allocation_table(
+    decisions: List[AllocationDecision],
+    request_tracking: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Render allocation decision table with score breakdown bars, delivery status, and plain explanation."""
     if not decisions:
         render_html(
             '<div style="padding: 24px 16px; border: 1px dashed var(--line); border-radius: 6px; text-align: center; color: var(--ink-2);">'
-            'No allocation decisions processed yet. Run allocation from the sidebar.'
+            'No allocation decisions processed yet. Advance simulation (Step / Run to end) to allocate.'
             '</div>'
         )
         return
@@ -450,6 +625,21 @@ def render_allocation_table(decisions: List[AllocationDecision]) -> None:
         }.get(d.outcome, str(d.outcome.value))
 
         pill = status_pill(outcome_text, kind=outcome_kind)
+
+        # Delivery & Deadline status
+        dl_status = d.deadline_status
+        if not dl_status and request_tracking and d.request_id in request_tracking:
+            dl_status = request_tracking[d.request_id].get("deadline_status")
+
+        if dl_status:
+            if dl_status == "On time":
+                deliv_pill = status_pill("On time", kind="ok")
+            else:
+                deliv_pill = status_pill(dl_status, kind="critical")
+        elif d.outcome == AllocationOutcome.REFUSED:
+            deliv_pill = '<span style="color:var(--ink-2); font-size:12px;">&mdash;</span>'
+        else:
+            deliv_pill = status_pill("In transit", kind="info")
 
         tot = max(b.total_score, 0.001)
         p_urg = (b.urgency_term / tot) * 100.0
@@ -489,6 +679,7 @@ def render_allocation_table(decisions: List[AllocationDecision]) -> None:
             f'<td><span style="font-size:12px;color:var(--ink-2);">{html.escape(subst_text)}</span></td>'
             f'<td>{stacked_bar}</td>'
             f'<td>{pill}</td>'
+            f'<td>{deliv_pill}</td>'
             f'<td style="font-size:12px; color:var(--ink-2);">{html.escape(d.reason)}</td>'
             f'</tr>'
         )
@@ -519,6 +710,7 @@ def render_allocation_table(decisions: List[AllocationDecision]) -> None:
         f'<th style="width: 100px;">Substitution</th>'
         f'<th style="width: 140px;">Score Breakdown</th>'
         f'<th style="width: 85px;">Outcome</th>'
+        f'<th style="width: 105px;">Delivery</th>'
         f'<th>Clinical Reason</th>'
         f'</tr></thead>'
         f'<tbody>{"".join(table_rows)}</tbody>'
@@ -578,14 +770,14 @@ def render_message_log_table(filtered_records: List[Dict[str, Any]], hospitals_m
         icon_name = "alert" if perf in ["BREACH_ALERT", "QUARANTINE"] else None
         pill = status_pill(perf, kind=perf_kind, icon=icon_name)
 
-        time_str = f"T+{int(r.get('timestamp', 0)):02d}"
+        time_str = f"T+{int(r.get('timestamp', 0))} min"
         from_name = format_agent_name(r.get("sender", ""), hospitals_map)
         to_name = format_agent_name(r.get("receiver", ""), hospitals_map)
         summary_text = r.get("summary", "")
 
         row_html = (
             f'<tr style="border-left: 3px solid {border_col};">'
-            f'<td class="mono" style="width: 55px; color: var(--ink-2);">{time_str}</td>'
+            f'<td class="mono" style="width: 75px; white-space: nowrap; color: var(--ink-2);">{time_str}</td>'
             f'<td style="white-space: nowrap; font-weight: 500;">{html.escape(from_name)} &rarr; {html.escape(to_name)}</td>'
             f'<td style="width: 125px;">{pill}</td>'
             f'<td style="color: var(--ink);">{html.escape(summary_text)}</td>'
@@ -598,7 +790,7 @@ def render_message_log_table(filtered_records: List[Dict[str, Any]], hospitals_m
         f'<div class="log-table-container">'
         f'<table class="log-table">'
         f'<thead><tr>'
-        f'<th style="width: 55px;">Time</th>'
+        f'<th style="width: 75px;">Time</th>'
         f'<th>From &rarr; To</th>'
         f'<th style="width: 125px;">Type</th>'
         f'<th>Details</th>'

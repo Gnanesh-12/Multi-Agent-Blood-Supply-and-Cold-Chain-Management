@@ -61,6 +61,12 @@ class DeliveryAgent(BaseAgent):
         self.is_quarantined: bool = False
         self.replan_events: List[Dict[str, Any]] = []
 
+        # Deadline tracking
+        self.created_at: float = 0.0
+        self.time_to_need: float = 60.0
+        self.deadline: float = float("inf")
+        self.deadline_status: Optional[str] = None
+
         if self.cargo_units:
             for u in self.cargo_units:
                 u.status = BloodUnitStatus.IN_TRANSIT
@@ -69,6 +75,11 @@ class DeliveryAgent(BaseAgent):
     def is_idle(self) -> bool:
         """Vehicle is available for new dispatch if not currently en route."""
         return not self.is_accepted or self.is_completed
+
+    @property
+    def speed_kmh(self) -> float:
+        """Vehicle cruising speed in km/h from network config."""
+        return getattr(self.city_network, "default_speed_kmh", 45.0)
 
     @property
     def current_node(self) -> str:
@@ -199,6 +210,16 @@ class DeliveryAgent(BaseAgent):
                 if u.status != BloodUnitStatus.QUARANTINED:
                     u.status = BloodUnitStatus.DELIVERED
 
+            # Deadline evaluation on arrival
+            arrival_time = sim_time
+            if arrival_time <= self.deadline:
+                deadline_status = "On time"
+            else:
+                late_mins = round(arrival_time - self.deadline, 1)
+                late_str = f"{int(late_mins)}" if late_mins == int(late_mins) else f"{late_mins}"
+                deadline_status = f"Late by {late_str} min"
+            self.deadline_status = deadline_status
+
             # Send single DELIVERED message to destination hospital with request conversation_id
             b_type = self.cargo_units[0].blood_type if self.cargo_units else "O-"
             self.send(
@@ -217,6 +238,8 @@ class DeliveryAgent(BaseAgent):
                     "temperature_history": list(self.temperature_history),
                     "delivered_at": sim_time,
                     "is_backup": self.is_backup,
+                    "deadline": self.deadline,
+                    "deadline_status": deadline_status,
                 },
                 timestamp=sim_time,
                 conversation_id=self.request_id,
@@ -277,6 +300,12 @@ class DeliveryAgent(BaseAgent):
         self.request_id = msg.conversation_id or p.get("request_id", "")
         self.is_backup = p.get("is_backup", False)
         self.start_time = current_time
+
+        # Extract deadline information
+        self.created_at = float(p.get("created_at", current_time))
+        self.time_to_need = float(p.get("time_to_need", 60.0))
+        self.deadline = float(p.get("deadline", self.created_at + self.time_to_need))
+        self.deadline_status = None
 
         self.current_route_index = 0
         self.edge_progress = 0.0

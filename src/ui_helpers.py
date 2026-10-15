@@ -442,6 +442,9 @@ def build_message_timeline_figure(messages: List[Message]) -> go.Figure:
                 )
             )
 
+    first_msg_time = min([m.timestamp for m in messages], default=0.0)
+    max_msg_time = max([m.timestamp for m in messages], default=0.0)
+
     fig.update_layout(
         template="plotly_dark",
         paper_bgcolor="rgba(11, 15, 25, 0)",
@@ -452,6 +455,7 @@ def build_message_timeline_figure(messages: List[Message]) -> go.Figure:
             title="Simulation Time (minutes)",
             showgrid=True,
             gridcolor="rgba(255, 255, 255, 0.05)",
+            range=[first_msg_time, max(first_msg_time + 15.0, max_msg_time + 2.0)],
         ),
         yaxis=dict(
             tickmode="array",
