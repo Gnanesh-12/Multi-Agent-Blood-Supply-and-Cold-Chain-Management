@@ -151,3 +151,20 @@ def test_two_hospitals_o_negative_message_flow():
         summary = m.summary()
         assert not summary.startswith("{"), f"Summary contains raw dict string: {summary}"
         assert "object at 0x" not in summary, f"Summary contains raw repr: {summary}"
+
+
+def test_metrics_updating_accurately_after_deliveries():
+    """Verify that fulfilled and delivery metrics correctly reflect outcomes after run_until_idle."""
+    engine = SimulationEngine(CONFIG_PATH, random_seed=42)
+    engine.load_preset_scenario("2. Two Hospitals Competing for Scarce O-")
+    engine.run_allocation()
+    engine.run_until_idle(max_steps=50)
+
+    metrics = engine.get_summary_metrics()
+    assert metrics["requests_received"] == 2
+    assert metrics["fulfilled"] == 1, "Hospital 1 request should remain counted as fulfilled after delivery"
+    assert metrics["partial"] == 0
+    assert metrics["refused"] == 1
+    assert metrics["units_delivered"] == 2
+    assert metrics["fulfilled"] + metrics["partial"] + metrics["refused"] == metrics["requests_received"]
+

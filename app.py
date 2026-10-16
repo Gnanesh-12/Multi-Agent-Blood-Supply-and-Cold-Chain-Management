@@ -171,6 +171,7 @@ def open_requirement_dialog(hospital_id: str) -> None:
                 reason=reason,
             )
             st.session_state["active_modal_hospital"] = None
+            st.session_state["last_processed_hospital_selection"] = None
             st.toast(f"Request {req.request_id} sent to Central Bank")
             st.rerun()
 
@@ -221,6 +222,7 @@ with st.sidebar:
         st.session_state["active_modal_hospital"] = None
         st.session_state["dismissed_banners"].clear()
         st.session_state["last_breach_alert"] = None
+        st.session_state["last_processed_hospital_selection"] = None
 
     curr_idx = 0
     if st.session_state["current_scenario_name"] in scenario_options:
@@ -239,6 +241,7 @@ with st.sidebar:
         st.session_state["active_modal_hospital"] = None
         st.session_state["dismissed_banners"].clear()
         st.session_state["last_breach_alert"] = None
+        st.session_state["last_processed_hospital_selection"] = None
         st.rerun()
 
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
@@ -246,63 +249,14 @@ with st.sidebar:
     # 2. Step 1 min, Run to end (side by side; short labels must not truncate)
     col_s1, col_s2 = st.columns(2)
     with col_s1:
-        if st.button("Step 1 min", type="primary", use_container_width=True, help="Advance simulation by 1 minute (auto-allocates pending requests)"):
+        if st.button("Step 1 min", type="primary", use_container_width=True):
             engine.step(1.0)
             st.rerun()
     with col_s2:
-        if st.button("Run to end", use_container_width=True, help="Run simulation until all deliveries complete"):
+        if st.button("Run to end", use_container_width=True):
             engine.run_until_idle(max_steps=80)
             st.rerun()
 
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-
-    # 4. Rush hour (toggle; needed for the A* traffic demo)
-    def _on_rush_hour_change() -> None:
-        if st.session_state["rush_hour_toggle"]:
-            engine.city_network.set_all_traffic_delays(2.0)
-        else:
-            if st.session_state.get("current_scenario_name") == "5. Traffic Jam (A* Dynamic Re-routing)":
-                engine.city_network.set_all_traffic_delays(1.0)
-                engine.city_network.set_road_delay("CBB", "J4", 3.0)
-            else:
-                engine.city_network.set_all_traffic_delays(1.0)
-
-    st.toggle("Rush hour", key="rush_hour_toggle", on_change=_on_rush_hour_change)
-
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-
-    # 5. Inject breach: vehicle selectbox + "Inject breach" button (disabled when no vehicle is moving)
-    moving_devs = [k for k, d in engine.delivery_agents.items() if d.is_accepted and not d.is_completed]
-    has_moving = len(moving_devs) > 0
-
-    sel_breach_dev = st.selectbox(
-        "Vehicle for breach",
-        moving_devs if has_moving else ["No vehicle moving"],
-        disabled=not has_moving,
-        label_visibility="collapsed",
-    )
-    if st.button(
-        "Inject breach",
-        disabled=not has_moving,
-        use_container_width=True,
-        help="Inject cold-chain temperature failure into active vehicle",
-    ):
-        if has_moving and sel_breach_dev in moving_devs:
-            engine.inject_delivery_breach(sel_breach_dev, "HOT")
-            st.session_state["dismissed_banners"].discard(f"breach_{sel_breach_dev}")
-            st.toast(f"Injected heating breach into {sel_breach_dev}")
-            st.rerun()
-
-    # 6. Simulation clock T+mm:ss
-    mins = int(engine.current_time)
-    secs = int((engine.current_time * 60) % 60)
-    clock_str = f"T+{mins:02d}:{secs:02d}"
-    st.markdown(
-        f'<div style="font-size:12px; color:var(--ink-2); margin-top:14px;">'
-        f'Simulation clock: <span class="mono" style="font-weight:600; color:var(--ink);">{clock_str}</span>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
 
 
 # ==========================================
@@ -364,8 +318,13 @@ with col_map:
         for pt in selected_data["selection"]["points"]:
             cdata = pt.get("customdata")
             if cdata and cdata in engine.hospitals:
-                st.session_state["active_modal_hospital"] = cdata
+                if st.session_state.get("last_processed_hospital_selection") != cdata:
+                    st.session_state["last_processed_hospital_selection"] = cdata
+                    st.session_state["active_modal_hospital"] = cdata
+                    st.rerun()
                 break
+    else:
+        st.session_state["last_processed_hospital_selection"] = None
 
     st.markdown(
         '<div class="hint-text">Click a hospital to raise a blood request.</div>',

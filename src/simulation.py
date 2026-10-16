@@ -168,6 +168,7 @@ class SimulationEngine:
             "delivered_at": None,
             "status": "PENDING",
             "allocated": 0,
+            "outcome": None,
             "deadline_status": None,
         }
         return req
@@ -179,6 +180,7 @@ class SimulationEngine:
                 self.allocation_history.append(d)
             if d.request_id in self.request_tracking:
                 self.request_tracking[d.request_id]["allocated"] = d.units_allocated
+                self.request_tracking[d.request_id]["outcome"] = d.outcome.value
                 self.request_tracking[d.request_id]["status"] = d.outcome.value
 
     def run_allocation(
@@ -255,6 +257,12 @@ class SimulationEngine:
                 if dev.is_completed and dev.request_id in self.request_tracking:
                     self.request_tracking[dev.request_id]["delivered_at"] = self.current_time
                     self.request_tracking[dev.request_id]["status"] = "DELIVERED"
+                    if not self.request_tracking[dev.request_id].get("outcome"):
+                        self.request_tracking[dev.request_id]["outcome"] = (
+                            AllocationOutcome.FULFILLED.value
+                            if self.request_tracking[dev.request_id].get("allocated", 0) >= self.request_tracking[dev.request_id].get("units_requested", 1)
+                            else AllocationOutcome.PARTIAL.value
+                        )
                     deadline_status = dev.deadline_status
                     if not deadline_status:
                         dl = self.request_tracking[dev.request_id].get("deadline", dev.deadline)
@@ -414,9 +422,23 @@ class SimulationEngine:
     def get_summary_metrics(self) -> Dict[str, Any]:
         """Compute key operational summary indicators for the dashboard metric cards."""
         total_requests = len(self.request_tracking)
-        fulfilled = sum(1 for r in self.request_tracking.values() if r["status"] == AllocationOutcome.FULFILLED.value)
-        partial = sum(1 for r in self.request_tracking.values() if r["status"] == AllocationOutcome.PARTIAL.value)
-        refused = sum(1 for r in self.request_tracking.values() if r["status"] == AllocationOutcome.REFUSED.value)
+        fulfilled = sum(
+            1 for r in self.request_tracking.values()
+            if r.get("outcome") == AllocationOutcome.FULFILLED.value
+            or r.get("status") == AllocationOutcome.FULFILLED.value
+            or (r.get("status") == "DELIVERED" and r.get("allocated", 0) >= r.get("units_requested", 1))
+        )
+        partial = sum(
+            1 for r in self.request_tracking.values()
+            if r.get("outcome") == AllocationOutcome.PARTIAL.value
+            or r.get("status") == AllocationOutcome.PARTIAL.value
+            or (r.get("status") == "DELIVERED" and 0 < r.get("allocated", 0) < r.get("units_requested", 1))
+        )
+        refused = sum(
+            1 for r in self.request_tracking.values()
+            if r.get("outcome") == AllocationOutcome.REFUSED.value
+            or r.get("status") == AllocationOutcome.REFUSED.value
+        )
 
         # Units delivered
         units_delivered = sum(
