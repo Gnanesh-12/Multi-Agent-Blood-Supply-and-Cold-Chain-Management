@@ -1,442 +1,359 @@
-# Multi-Agent Blood Supply & Cold-Chain Management System
+# Multi-Agent Blood Supply and Cold-Chain Management
 
 [![Python Version](https://img.shields.io/badge/Python-3.11%20%7C%203.12%20%7C%203.13-blue.svg)](https://www.python.org/)
-[![UI Framework](https://img.shields.io/badge/Streamlit-1.40+-FF4B4B.svg)](https://streamlit.io/)
-[![Visualization](https://img.shields.io/badge/Plotly-Interactive%20Maps%20%26%20Telemetry-3F4F75.svg)](https://plotly.com/)
-[![Tests](https://img.shields.io/badge/Pytest-27%20Passed-brightgreen.svg)](https://pytest.org/)
-[![Architecture](https://img.shields.io/badge/Architecture-Decoupled%20FIPA--ACL%20MAS-orange.svg)]()
-[![License](https://img.shields.io/badge/License-MIT-green.svg)]()
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> **Autonomous Clinical Logistics & Perishable Cold-Chain Safety**  
-> An autonomous multi-agent logistics platform modeling urban blood banking networks. Engineered with hand-crafted AI algorithms, mathematically proven admissible heuristics ($A^*$), multi-criteria priority optimization, horn-clause forward-chaining safety rule engines, and real-time FIPA-ACL communicative negotiation.
+**Course:** Foundations of Artificial Intelligence  
+**Author / Team:** Gnanesh Khandavilli  
+**Case Study Document:** [docs/CASE_STUDY.md](docs/CASE_STUDY.md) (Detailed PEAS analysis and Russell & Norvig environment characterization)
 
 ---
 
-## 📑 Table of Contents
-1. [Executive Overview & Clinical Context](#-executive-overview--clinical-context)
-2. [Multi-Agent System Architecture](#-multi-agent-system-architecture)
-3. [Core AI Algorithms & Mathematical Formulations](#-core-ai-algorithms--mathematical-formulations)
-   - [Multi-Attribute Urgency Scoring & Greedy Allocation](#1-multi-attribute-urgency-scoring--greedy-allocation)
-   - [Hand-Crafted A* Pathfinding & Heuristic Admissibility Proof](#2-hand-crafted-a-pathfinding--heuristic-admissibility-proof)
-   - [First-Expiry-First-Out (FEFO) Shelf-Life Sorting](#3-first-expiry-first-out-fefo-shelf-life-sorting)
-   - [Horn-Clause Safety Rule Engine & Dual-Bank Backup Sourcing](#4-horn-clause-safety-rule-engine--dual-bank-backup-sourcing)
-   - [RBC Compatibility Matrix & Substitution Rules](#5-rbc-compatibility-matrix--substitution-rules)
-4. [In-Depth Explanation of All Preset Scenarios](#-in-depth-explanation-of-all-preset-scenarios)
+## Table of Contents
+1. [Overview and Problem Context](#overview-and-problem-context)
+2. [Six-Step UI Demo Walkthrough](#six-step-ui-demo-walkthrough)
+3. [Tools and Why We Chose Them](#tools-and-why-we-chose-them)
+4. [System Architecture and Interaction Protocol](#system-architecture-and-interaction-protocol)
+5. [Algorithms and Mathematical Formulations](#algorithms-and-mathematical-formulations)
+   - [Multi-Attribute Urgency Scoring and Greedy Allocation](#multi-attribute-urgency-scoring-and-greedy-allocation)
+   - [Hand-Crafted A* Pathfinding and Admissibility Proof](#hand-crafted-a-pathfinding-and-admissibility-proof)
+   - [First-Expiry-First-Out Shelf-Life Sorting](#first-expiry-first-out-shelf-life-sorting)
+   - [Horn-Clause Safety Rules and Dual-Bank Sourcing](#horn-clause-safety-rules-and-dual-bank-sourcing)
+   - [Red Blood Cell Compatibility Matrix](#red-blood-cell-compatibility-matrix)
+6. [Scenario Walkthroughs and Experimental Results](#scenario-walkthroughs-and-experimental-results)
    - [Scenario 1: Single Routine Request](#scenario-1-single-routine-request)
    - [Scenario 2: Two Hospitals Competing for Scarce O-](#scenario-2-two-hospitals-competing-for-scarce-o-)
-   - [Scenario 3: Mass-Casualty Incident (4 Hospitals at Once)](#scenario-3-mass-casualty-incident-4-hospitals-at-once)
-   - [Scenario 4: Temperature Breach Mid-Delivery → Backup from Reserve](#scenario-4-temperature-breach-mid-delivery--backup-from-reserve)
-   - [Scenario 5: Traffic Jam (A* Dynamic Re-Routing)](#scenario-5-traffic-jam-a-dynamic-re-routing)
-   - [Scenario 6: Stockout → Compatible Substitution](#scenario-6-stockout--compatible-substitution)
-5. [User Interface & Operations Dashboard](#-user-interface--operations-dashboard)
-6. [Quickstart & Installation](#-quickstart--installation)
-7. [Automated Verification & Test Suite](#-automated-verification--test-suite)
-8. [Codebase Organization & Scalability](#-codebase-organization--scalability)
+   - [Scenario 3: Mass-Casualty Incident (4 Hospitals)](#scenario-3-mass-casualty-incident-4-hospitals)
+   - [Scenario 4: Temperature Breach Mid-Delivery -> Backup from Reserve](#scenario-4-temperature-breach-mid-delivery---backup-from-reserve)
+   - [Scenario 5: Traffic-Aware Route Selection](#scenario-5-traffic-aware-route-selection)
+   - [Scenario 6: Stockout -> Compatible Substitution](#scenario-6-stockout---compatible-substitution)
+7. [Installation and Test Execution](#installation-and-test-execution)
+8. [Codebase Structure](#codebase-structure)
 
 ---
 
-## 🌟 Executive Overview & Clinical Context
+## Overview and Problem Context
 
-In emergency medicine and surgical trauma care, **blood supply logistics is a life-critical, multi-dimensional constrained optimization problem**. Blood products possess unique operational characteristics that make conventional supply chain models insufficient:
+Hospital blood supply management involves strict operational constraints:
+1. **Perishability:** Packed red blood cells (PRBCs) have finite shelf lives, requiring First-Expiry-First-Out (FEFO) inventory rotation to reduce spoilage.
+2. **Cold-Chain Safety:** Blood units must remain between $1.0^\circ\text{C}$ and $10.0^\circ\text{C}$ during transit. Unmonitored heating or freezing degrades cell viability, requiring cargo quarantine.
+3. **Immunological Compatibility:** Transfusions depend on ABO and Rh(D) compatibility rules. When exact matches are unavailable, compatible substitutions (e.g., $O^-$ donor units) must be identified.
+4. **Demand Contention:** Under scarce supply, multiple hospitals contend for limited units. Allocations must prioritize emergency procedures and tight surgical deadlines without starving routine requests.
 
-1. **Extreme Perishability:** Whole blood and packed red blood cells (PRBCs) have finite clinical shelf lives (typically 35–42 days, modeled on accelerated scales in simulation). Stock rotation must minimize discard rates without compromising surgical availability.
-2. **Strict Cold-Chain Regulatory Boundaries:** Blood products must be maintained within a rigid thermal envelope of **$1.0^\circ\text{C}$ to $10.0^\circ\text{C}$** throughout transportation. Thermal violations degrade erythrocyte viability and risk hemolytic reactions; unmonitored temperature breaches necessitate mandatory cargo quarantine.
-3. **Immunological Compatibility Constraints:** Blood transfusions are bound by ABO and Rh(D) antigen-antibody compatibility. While exact-match units are preferred, stockouts require clinically valid cross-group substitutions (e.g., $O^-$ universal donor units).
-4. **Demand Contention & Starvation Prevention:** When mass casualties or concurrent emergency surgeries deplete blood bank reserves, the system must dynamically arbitrate allocation based on patient urgency, surgical deficit, and remaining time-to-need ($T_{need}$), while guaranteeing that lower-urgency elective requests are not starved indefinitely.
-
-This platform implements a **decentralized, autonomous Multi-Agent System (MAS)** that coordinates hospitals, blood banks, and delivery vehicles to solve these challenges in real time over a digitized city road topology.
+This project implements a **synchronous discrete-time simulation** of an urban blood banking network where software agents communicate exclusively through a centralized `MessageBus` routed by `SimulationEngine`.
 
 ---
 
-## 🤖 Multi-Agent System Architecture
+## Six-Step UI Demo Walkthrough
 
-The system is constructed with fully decoupled, autonomous agents communicating over an asynchronous in-memory `MessageBus` using **FIPA-ACL** (Foundation for Intelligent Physical Agents - Agent Communication Language) standard performatives.
+The Streamlit web interface ([app.py](app.py)) provides an interactive view of the simulation:
 
-```
-                           +-------------------------------------+
-                           |            MessageBus               |
-                           |  (Decoupled FIPA-ACL Message Queue) |
-                           +--+---------------+---------------+--+
-                              |               |               |
-             +----------------+               |               +----------------+
-             |                                |                                |
-             v                                v                                v
-+--------------------------+    +--------------------------+    +--------------------------+
-|      Hospital Agents     |    |     Blood Bank Agents    |    |      Delivery Agents     |
-|   (H1, H2, H3, H4, H5)   |    |    (Central & Reserve)   |    | (VAN-01, VAN-02, VAN-03) |
-+--------------------------+    +--------------------------+    +--------------------------+
-| - Monitor bed capacity   |    | - Real-time inventory    |    | - Hand-crafted A* motion |
-| - Track local deficits   |    | - Multi-criteria scoring |    | - Telemetry broadcasting |
-| - Calculate time-to-need |    | - FEFO shelf-life sort   |    | - Onboard thermal sensor |
-| - Issue REQUEST & ACK    |    | - Autonomous dispatch    |    | - Dynamic re-routing     |
-+--------------------------+    +--------------------------+    +--------------------------+
-```
+1. **Select a Scenario:** Use the sidebar dropdown to choose one of the 6 preset scenarios (e.g., *2. Two Hospitals Competing for Scarce O-*).
+2. **Inspect Initial State:** Review the Regional Network Map, Central Bank stock levels, and queued requests in the callout card above the map.
+3. **Step the Clock:** Click **Step 1 min** to advance simulation time ($\Delta t = 1.0$ min). The Central Blood Bank automatically runs priority allocation on pending requests and dispatches available delivery vehicles.
+4. **Monitor Active Transit:** Observe delivery vans moving along road segments on the map, view waypoint hops in the Route Status card, and inspect live thermal readings.
+5. **Fast-Forward to Completion:** Click **Run to end** to step the simulation continuously until active deliveries finish.
+6. **Analyze Results:** Review the four KPI cards (Requests, Fulfilled, In Transit / Delivered, Breaches), the Allocation Decisions table with multi-criteria score breakdowns, and the FIPA-ACL message timeline.
 
-### Agent Roles & Behavioral Profiles
+---
 
-| Agent Type | Identifiers | Core Capabilities & Decision Cycles |
+## Tools and Why We Chose Them
+
+The system uses standard Python libraries pinned in [requirements.txt](requirements.txt):
+
+| Package | Version | Purpose in this Project |
 | :--- | :--- | :--- |
-| **Hospital Agent** | `H1`–`H5` | Evaluates clinical bed utilization, determines blood unit deficits across 8 blood groups, predicts surgical need deadlines ($T_{need}$), and initiates `REQUEST` performatives. Validates cold-chain integrity upon cargo arrival before emitting `ACK`. |
-| **Central Blood Bank (CBB)** | `CBB` | Regional primary distribution hub. Aggregates incoming hospital requirements, executes multi-attribute priority ranking, manages inventory rotation (FEFO), assigns dispatch routes to active delivery vehicles, and orchestrates peer negotiations. |
-| **Reserve Blood Bank (RBB)** | `RBB` | Strategic contingency reserve. Holds backup inventory for critical trauma overflow and cold-chain breach recovery. Processes `BACKUP_REQUEST` performatives from CBB and dispatches rapid replacement deliveries. |
-| **Delivery Agent** | `VAN-01`–`VAN-04` | Autonomous physical transit agents. Computes point-to-point routes using hand-crafted $A^*$ search, updates edge traversal telemetry, simulates thermal dynamics with ambient temperature exchange, and triggers immediate alerts upon thermal anomalies. |
+| **Streamlit** | `1.65.0` | UI presentation layer for interactive scenario loading, stepping, and clinical intake dialogs (`@st.dialog`). |
+| **Plotly** | `6.9.0` | Interactive 2D road network maps, route traces, sensor temperature curves with safety bands, and FIPA-ACL timeline charts. |
+| **NetworkX** | `3.6.1` | **Graph data structure storage only.** NetworkX stores junction nodes, road edges, lengths, and delay factors. **No NetworkX shortest path or routing algorithms are used.** |
+| **pandas** | `3.0.2` | Dataframe formatting for tabular allocation history and message logs. |
+| **PyYAML** | `6.0.3` | External configuration parser for [config/city.yaml](config/city.yaml). |
+| **pytest** | `9.1.1` | Automated test suite validating heuristic admissibility, allocation fairness, and simulation determinism. |
 
-### FIPA-ACL Communication Protocol
+### Architectural Rationale: Why Not Mesa or SPADE?
 
-Agents exchange strongly-typed `Message` records containing standard metadata: `performative`, `sender`, `receiver`, `timestamp`, `conversation_id`, and structured `payload`.
+- **Why not Mesa?** Mesa is designed primarily for 2D grid/lattice agent-based social and economic modeling. It does not provide built-in FIPA-ACL message performatives or graph-based routing abstractions. Implementing the domain logic directly using Python dataclasses and NetworkX graphs kept the simulation modular, lightweight, and directly testable without framework overhead.
+- **Why not SPADE?** SPADE requires an external XMPP/Jabber server daemon and asynchronous network I/O. This introduces network latency, external process dependencies, and non-deterministic message arrival orders. For an educational simulation that requires deterministic test verification and synchronized time stepping, an in-memory `MessageBus` managed by `SimulationEngine` is more reliable and reproducible.
+
+---
+
+## System Architecture and Interaction Protocol
+
+The simulation executes in synchronous discrete-time steps ($\Delta t = 1.0$ min). All agent coordination occurs via structured messages passed through the `MessageBus`.
+
+```
+                      +------------------------------------------+
+                      |         SimulationEngine Clock           |
+                      +--------------------+---------------------+
+                                           | Step ticks
+                                           v
++-----------------------------------------------------------------------------------+
+|                        Decoupled MessageBus (FIPA-ACL)                            |
++-------------------+----------------------+--------------------+-------------------+
+                    ^                      ^                    ^
+                    |                      |                    |
++-------------------+------+  +------------+---------+  +-------+------------------+
+|      Hospital Agents     |  |   Blood Bank Agents   |  |     Delivery Agents      |
+|         (H1 to H5)       |  |      (CBB, RBB)       |  | (VAN-01, -02, -03, -04)  |
++--------------------------+  +-----------------------+  +--------------------------+
+| - Track surgery schedule |  | - Urgency score heap  |  | - Custom A* navigation   |
+| - Monitor local stock    |  | - FEFO shelf-life     |  | - Thermal sensor reading |
+| - Send REQUEST           |  | - Route dispatch      |  | - Send STATUS_UPDATE     |
+| - Verify temp log & ACK  |  | - Backup negotiation  |  | - Emit BREACH_ALERT      |
++--------------------------+  +-----------------------+  +--------------------------+
+```
+
+### Agent Roles
+
+- **Hospital Agent (`H1` to `H5`):** Tracks local hospital stock and scheduled surgical needs. When stock is insufficient for upcoming surgeries, it calculates time-to-need ($T_{need}$) and submits a `REQUEST` message. Upon delivery, it inspects the vehicle temperature log and replies with `ACK`.
+- **Central Blood Bank Agent (`CBB`):** Manages regional inventory. Receives hospital requests, computes multi-attribute scores, runs greedy heap allocation with FEFO rotation, and dispatches primary vehicles (`VAN-01`, `VAN-02`).
+- **Reserve Blood Bank Agent (`RBB`):** Maintains reserve buffer stock. When `CBB` experiences stockouts or temperature breaches, `RBB` processes `BACKUP_REQUEST` messages and dispatches reserve vehicles (`VAN-03`, `VAN-04`).
+- **Delivery Agent (`VAN-01` to `VAN-04`):** Navigates the road network using hand-crafted $A^*$ search. Emits `STATUS_UPDATE` messages with position and temperature, monitors thermal sensor readings, and raises `BREACH_ALERT` if limits are exceeded.
+
+### Interaction Sequence
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Clinician as Surgical Staff
-    participant H as Hospital Agent (H1)
+    participant H as Hospital Agent
     participant CBB as Central Blood Bank
     participant RBB as Reserve Blood Bank
     participant DEV as Delivery Agent (VAN-01)
 
-    Clinician->>H: Clinical Demand (Blood Type, Units, Need Time)
-    H->>CBB: REQUEST (Urgency, Time-to-Need, Deficit Ratio)
-    Note over CBB: Multi-Attribute Urgency Scoring<br/>Greedy Heap Ranking + FEFO Allocation
-    alt Normal Stock Available
-        CBB->>H: INFORM (Approval, Rank, Score Breakdown, ETA)
-        CBB->>DEV: DISPATCH (A* Route Path, Unit IDs, Delivery Deadline)
+    H->>CBB: REQUEST (Blood Type, Units, Urgency, Need Time)
+    Note over CBB: Score requests, rank via max-heap, select units via FEFO
+    alt Stock Available at CBB
+        CBB->>H: INFORM (Approval, Rank, ETA)
+        CBB->>DEV: DISPATCH (A* Path, Assigned Units, Deadline)
         DEV->>CBB: ACCEPT (Dispatch Confirmed)
-        loop Every Simulation Minute
-            DEV->>DEV: Sensory Step (Thermal Telemetry & GPS Progress)
-            DEV->>CBB: STATUS_UPDATE (Coordinates, Temp °C, Speed, ETA)
+        loop Every Simulation Step
+            DEV->>CBB: STATUS_UPDATE (Coordinates, Temp, ETA)
         end
-        DEV->>H: DELIVERED (Blood Units, Final Temperature)
-        H->>CBB: ACK (Clinical Receipt Confirmed, Inventory Updated)
-    else Stock Depleted / Contention
-        CBB->>RBB: BACKUP_REQUEST (Units Needed, Urgency, Deadline)
-        alt RBB Stock Viable
+        DEV->>H: DELIVERED (Units Delivered)
+        H->>CBB: ACK (Receipt Confirmed, Temp Verified)
+    else Stock Exhausted or In-Transit Breach
+        CBB->>RBB: BACKUP_REQUEST (Units Needed, Urgency)
+        alt RBB Has Stock
             RBB->>CBB: PROPOSE (Backup Sourced, ETA)
-            RBB->>DEV: DISPATCH (Backup Rapid Route)
-            DEV->>H: DELIVERED (Replacement Cargo)
+            RBB->>DEV: DISPATCH (Backup Vehicle)
+            DEV->>H: DELIVERED (Replacement Units)
             H->>RBB: ACK (Receipt Confirmed)
-        else All Banks Exhausted
-            CBB->>H: REFUSE (Definitive Stockout Reason Logged)
+        else RBB Depleted
+            CBB->>H: REFUSE (Stock Exhausted)
         end
     end
 ```
 
 ---
 
-## 🧠 Core AI Algorithms & Mathematical Formulations
+## Algorithms and Mathematical Formulations
 
-### 1. Multi-Attribute Urgency Scoring & Greedy Allocation
+### Multi-Attribute Urgency Scoring and Greedy Allocation
 
-To prevent ad-hoc allocation during clinical demand spikes, the Central Blood Bank applies a **multi-attribute greedy priority allocation algorithm**. When the simulation clock advances, pending requests are evaluated through a linear scalarized utility function:
+When multiple requests are pending, `CBB` ranks them using a weighted multi-criteria scoring function defined in `src/planning/allocation.py`:
 
-$$\text{Total Score}(R_i) = w_1 \cdot U_i + w_2 \cdot \left(\frac{60}{\max(5, T_{\text{need}, i})}\right) + w_3 \cdot D_i + w_4 \cdot \text{Rarity}(B_i) + w_5 \cdot (\Delta t_{\text{wait}, i} \times 0.1)$$
+$$\text{Score} = w_1 \cdot U + w_2 \cdot \left(\frac{60}{\max(5, T_{need})}\right) + w_3 \cdot D + w_4 \cdot R + w_5 \cdot (\Delta t_{wait} \times 0.1)$$
 
-#### Component Breakdown:
-- **Clinical Urgency ($U_i$):** Quantified as $U \in \{3.0 (\text{Emergency}), 2.0 (\text{Urgent}), 1.0 (\text{Routine})\}$.
-- **Imminent Need Penalty ($T_{\text{need}, i}$):** Scaled inversely such that a surgery needed in 15 minutes receives significantly higher weight ($60 / 15 = 4.0$) than a surgery scheduled in 120 minutes ($60 / 120 = 0.5$).
-- **Local Hospital Deficit ($D_i$):** Computed from hospital target and current inventory levels:
-  $$D_i = \max\left(0, \frac{\text{Target Stock} - \text{Current Stock}}{\text{Target Stock}}\right) \times 3.0$$
-- **Blood Type Rarity ($\text{Rarity}(B_i)$):** Reflects population scarcity and universal utility ($O^- = 1.0$, $B^- = 0.8$, $A^- = 0.7$, $AB^- = 0.7$, $O^+ = 0.5$, $A^+ = 0.4$, $B^+ = 0.3$, $AB^+ = 0.2$).
-- **Starvation Prevention Aging Bonus ($\Delta t_{\text{wait}, i}$):** Measures elapsed simulation minutes since initial request emission. Prevents lower-urgency routine surgeries from being permanently starved during prolonged trauma influxes.
+#### Weights from `config/city.yaml`
 
-#### Allocation Execution:
-1. Pending requests are loaded into a priority queue (**max-heap** via Python's `heapq`, $O(N \log N)$ complexity).
-2. The highest-scoring request populates available donor units.
-3. Each candidate unit is selected via **FEFO (First-Expiry-First-Out)**.
-4. If identical donor stock is depleted, the RBC Compatibility Matrix is evaluated for compatible substitutes.
-5. Every decision is recorded with its full vector breakdown ($w_1 \cdot U, w_2 \cdot T, \dots$) and final disposition (`FULFILLED`, `PARTIAL`, or `REFUSED`).
+| Weight | Parameter Name in Config | Default Value | Clinical Role |
+| :---: | :--- | :---: | :--- |
+| **$w_1$** | `w1_urgency_level` | `0.35` | Prioritizes clinical triaging: Emergency = 3.0, Urgent = 2.0, Routine = 1.0. |
+| **$w_2$** | `w2_time_to_need` | `0.25` | Inversely scales minutes remaining ($60 / \max(5, T_{need})$), giving higher priority to imminent procedures. |
+| **$w_3$** | `w3_deficit_ratio` | `0.15` | Scales local hospital deficit: $\max(0, (\text{Target} - \text{Current}) / \text{Target}) \times 3.0$. |
+| **$w_4$** | `w4_blood_type_rarity` | `0.15` | Multiplies blood rarity factor ($O^- = 1.0, AB^- = 0.9, \dots, AB^+ = 0.2$) $\times 3.0$. |
+| **$w_5$** | `w5_waiting_time` | `0.10` | Aging term: adds $0.1$ points per 10 simulation minutes waiting, preventing starvation of routine surgeries. |
+
+Requests are stored in a max-heap (`heapq`) and popped in descending score order.
 
 ---
 
-### 2. Hand-Crafted A* Pathfinding & Heuristic Admissibility Proof
+### Hand-Crafted A* Pathfinding and Admissibility Proof
 
-Vehicle movement across the city network is computed using an independent, hand-crafted $A^*$ search algorithm implemented from first principles (no third-party shortest path solvers).
+Route navigation across the network is computed by `astar_search()` in `src/planning/astar.py`.
 
-#### Cost Formulation:
-For any directed road edge between junction $u$ and junction $v$:
+#### Edge Cost Function
+For an edge $(u, v)$ with distance in kilometers and speed in km/h:
 
-$$g(u, v) = \frac{\text{Distance}_{\text{km}}(u, v)}{\text{Effective Speed}_{\text{km/h}}(u, v)} \times 60.0 \quad [\text{minutes}]$$
+$$c(u, v) = \frac{\text{Distance}_{\text{km}}(u, v)}{\text{Effective Speed}_{\text{km/h}}(u, v)} \times 60.0 \quad [\text{minutes}]$$
 
 Where:
 $$\text{Effective Speed}(u, v) = \frac{\text{Base Speed}(u, v)}{\text{Delay Factor}(u, v)}, \quad \text{Delay Factor} \ge 1.0$$
 
-#### Admissible & Consistent Heuristic:
-$$h(n, \text{Goal}) = \frac{\text{Euclidean Distance}_{\text{km}}(n, \text{Goal})}{\text{Max Network Speed}_{\text{km/h}}} \times 60.0$$
+#### Heuristic Function
+The heuristic estimates remaining travel time using straight-line Euclidean distance divided by the theoretical maximum network speed:
 
-#### Mathematical Proof of Admissibility & Optimality:
-1. **Admissibility ($h(n) \le h^*(n)$):** In any 2D Euclidean topology, the straight-line distance is the infimum of all physical road curve lengths:
+$$h(n, \text{Goal}) = \frac{\text{Euclidean Distance}_{\text{km}}(n, \text{Goal})}{\text{Max Speed}_{\text{km/h}}} \times 60.0$$
+
+Where $\text{Max Speed}_{\text{km/h}} = 70.0\text{ km/h}$, defined as `max_speed_kmh` in [config/city.yaml](config/city.yaml).
+
+#### Proof of Admissibility and Consistency
+
+1. **Admissibility ($h(n) \le h^*(n)$):**  
+   In 2D space, straight-line distance is the shortest possible distance between two points:
    $$\text{Dist}_{\text{Euclidean}}(n, \text{Goal}) \le \text{Dist}_{\text{Road Path}}(n, \text{Goal})$$
-2. The physical transit speed on any road edge cannot exceed the maximum theoretical network speed ($\text{Max Speed} = 60.0 \text{ km/h}$). Because $\text{Delay Factor} \ge 1.0$:
-   $$\text{Effective Speed}(u, v) \le \text{Max Speed} \quad \forall (u, v) \in E$$
-3. Therefore:
-   $$\frac{\text{Dist}_{\text{Euclidean}}(n, \text{Goal})}{\text{Max Speed}} \le \frac{\text{Dist}_{\text{Road Path}}(n, \text{Goal})}{\text{Effective Speed}} = g^*(n, \text{Goal})$$
-   Thus, $h(n)$ never overestimates the actual travel time to the destination.
-4. **Consistency (Monotonicity):** For any adjacent nodes $n$ and $n'$, the triangle inequality guarantees that $\text{Dist}(n, \text{Goal}) \le \text{Dist}(n, n') + \text{Dist}(n', \text{Goal})$. Dividing across by constant $\text{Max Speed}$ maintains the inequality $h(n) \le c(n, n') + h(n')$.
-5. **Optimality:** Because $h(n)$ is both admissible and consistent on a graph with positive edge weights, $A^*$ is guaranteed to find the globally time-optimal trajectory without reopening expanded nodes.
+   Because all road edge speeds satisfy $\text{Effective Speed}(u, v) \le \text{Base Speed}(u, v) \le \text{Max Speed} = 70.0\text{ km/h}$, the minimum time across any road segment is lower-bounded:
+   $$\frac{\text{Dist}_{\text{Euclidean}}(n, \text{Goal})}{\text{Max Speed}} \le \frac{\text{Dist}_{\text{Road Path}}(n, \text{Goal})}{\text{Effective Speed}} = h^*(n)$$
+   Hence, $h(n)$ never overestimates true travel time.
+
+2. **Consistency (Monotonicity Condition):**  
+   For any road edge from node $u$ to node $v$, the triangle inequality on Euclidean space ensures:
+   $$\text{Dist}_{\text{Euclidean}}(u, \text{Goal}) \le \text{Dist}_{\text{Euclidean}}(u, v) + \text{Dist}_{\text{Euclidean}}(v, \text{Goal})$$
+   Dividing through by the constant $\text{Max Speed} = 70.0\text{ km/h}$:
+   $$h(u) \le \frac{\text{Dist}_{\text{Euclidean}}(u, v)}{\text{Max Speed}} \times 60.0 + h(v)$$
+   Because the actual physical road distance satisfies $\text{Dist}_{\text{Road}}(u, v) \ge \text{Dist}_{\text{Euclidean}}(u, v)$ and $\text{Effective Speed}(u, v) \le \text{Max Speed}$, the edge cost satisfies:
+   $$c(u, v) = \frac{\text{Dist}_{\text{Road}}(u, v)}{\text{Effective Speed}(u, v)} \times 60.0 \ge \frac{\text{Dist}_{\text{Euclidean}}(u, v)}{\text{Max Speed}} \times 60.0$$
+   Therefore:
+   $$h(u) \le c(u, v) + h(v)$$
+   This satisfies the consistency condition, guaranteeing that node expansions are monotonic and optimal without reopening closed nodes.
 
 ---
 
-### 3. First-Expiry-First-Out (FEFO) Shelf-Life Sorting
+### First-Expiry-First-Out Shelf-Life Sorting
 
-When units of an identical or compatible blood type are available in blood bank inventory, the allocation engine sorts candidates by remaining shelf life ascending:
+When units of the requested blood type are available, the allocation engine sorts units by expiration timestamp ascending:
 
-$$\text{Sort Key}(U_k) = t_{\text{expiry}}(U_k) = t_{\text{pack}} + \text{ShelfLife}_{\text{mins}}$$
+$$\text{Sort Key}(U_k) = t_{\text{expiry}}(U_k) = t_{\text{pack}} + \text{ShelfLife}_{\text{minutes}}$$
 
-This guarantees that older viable blood units are prioritized for immediate dispatch, mitigating avoidable product expiration in regional banks.
-
----
-
-### 4. Horn-Clause Safety Rule Engine & Dual-Bank Backup Sourcing
-
-Safety rules are evaluated prior to agent step execution using a forward-chaining rule engine:
-
-$$\begin{aligned}
-\text{Rule 1 (Hyperthermia Breach): } & \bigwedge_{k=0}^{D-1} \left( T(t - k) > T_{\text{max}} \right) \implies \text{QuarantineCargo}() \land \text{EmitBreachAlert}() \\
-\text{Rule 2 (Hypothermia Breach): } & \bigwedge_{k=0}^{D-1} \left( T(t - k) < T_{\text{min}} \right) \implies \text{QuarantineCargo}() \land \text{EmitBreachAlert}() \\
-\text{Rule 3 (Product Expiration): } & t_{\text{sim}} \ge t_{\text{expiry}}(\text{Unit}) \implies \text{SetStatus}(\text{Unit}, \text{EXPIRED})
-\end{aligned}$$
-
-- **Thermal Bounds:** $T_{\text{min}} = 1.0^\circ\text{C}$, $T_{\text{max}} = 10.0^\circ\text{C}$.
-- **Debounce Persistence ($D$):** 3 consecutive simulation readings (filters momentary sensor noise).
-
-#### Dual-Bank Backup Sourcing Decision:
-When a delivery vehicle suffers a confirmed cold-chain breach, the spoiled cargo is quarantined immediately. The Central Blood Bank simultaneously initiates emergency replacement routing by calculating the $A^*$ travel cost from both banks to the destination hospital:
-
-$$\text{Source}^* = \arg\min_{B \in \{\text{CBB}, \text{RBB}\}} \left( A^*(B, H_{\text{dest}}) \right) \quad \text{subject to } \text{ViableStock}(B, \text{BloodType}) \ge \text{Units}$$
-
-The closer facility with viable inventory immediately dispatches an emergency replacement vehicle (`is_backup=True`).
+Units closest to expiration are allocated first to minimize clinical waste.
 
 ---
 
-### 5. RBC Compatibility Matrix & Substitution Rules
+### Horn-Clause Safety Rules and Dual-Bank Sourcing
 
-When an exact blood type is exhausted in primary inventory, the clinical allocation engine queries the **Red Blood Cell (RBC) Antigen-Antibody Compatibility Matrix**:
+Safety rules are evaluated on each simulation step:
+- **Hyperthermia:** Temperature $> 10.0^\circ\text{C}$ for $\ge 3$ consecutive readings $\implies$ Quarantine cargo and trigger backup.
+- **Hypothermia:** Temperature $< 1.0^\circ\text{C}$ for $\ge 3$ consecutive readings $\implies$ Quarantine cargo and trigger backup.
+- **Expiration:** Simulation time $\ge t_{\text{expiry}}(\text{Unit}) \implies$ Set unit status to `EXPIRED`.
 
-| Recipient Type | Permissible Donor Blood Groups (in preference order) |
+When a breach is confirmed, `CBB` calculates $A^*$ transit times from both banks to the destination hospital:
+
+$$\text{Source}^* = \arg\min_{B \in \{\text{CBB}, \text{RBB}\}} A^*(B, H_{\text{dest}}) \quad \text{where Bank } B \text{ has viable stock}$$
+
+---
+
+### Red Blood Cell Compatibility Matrix
+
+If exact blood matches are unavailable, the system evaluates compatible donor alternatives:
+
+| Recipient Type | Permissible Donor Blood Groups (in order of preference) |
 | :---: | :--- |
-| **$O^-$** | $O^-$ only *(Strict universal donor)* |
+| **$O^-$** | $O^-$ |
 | **$O^+$** | $O^+$, $O^-$ |
 | **$A^-$** | $A^-$, $O^-$ |
 | **$A^+$** | $A^+$, $A^-$, $O^+$, $O^-$ |
 | **$B^-$** | $B^-$, $O^-$ |
 | **$B^+$** | $B^+$, $B^-$, $O^+$, $O^-$ |
-| **$AB^-$**| $AB^-$, $A^-$, $B^-$, $O^-$ |
-| **$AB^+$**| $AB^+$, $AB^-$, $A^+$, $A^-$, $B^+$, $B^-$, $O^+$, $O^-$ *(Universal recipient)* |
-
-If compatible units are substituted, the decision is flagged as `SUBSTITUTED` in the audit log, recording the exact donor unit IDs utilized.
+| **$AB^-$** | $AB^-$, $A^-$, $B^-$, $O^-$ |
+| **$AB^+$** | $AB^+$, $AB^-$, $A^+$, $A^-$, $B^+$, $B^-$, $O^+$, $O^-$ |
 
 ---
 
-## 🎮 In-Depth Explanation of All Preset Scenarios
+## Scenario Walkthroughs and Experimental Results
 
-The operations dashboard features **6 interactive, pre-configured clinical scenarios**. Each scenario isolates and verifies specific algorithmic and multi-agent capabilities.
-
-```
-+---------------------------------------------------------------------------------------------------+
-| PRESET DEMONSTRATION SCENARIOS OVERVIEW                                                           |
-+---+---------------------------------------------------------+-------------------------------------+
-| # | Scenario Title                                          | Core AI Concept Demonstrated        |
-+---+---------------------------------------------------------+-------------------------------------+
-| 1 | Single Routine Request                                  | Baseline FIPA-ACL & A* Transit      |
-| 2 | Two Hospitals Competing for Scarce O-                   | Priority Contention & Starvation    |
-| 3 | Mass-Casualty Incident (4 Hospitals at Once)            | Multi-Request Heap Arbitration      |
-| 4 | Temperature Breach Mid-Delivery -> Backup from Reserve  | Safety Rule Quarantine & Backup Svc |
-| 5 | Traffic Jam (A* Dynamic Re-Routing)                     | Real-Time Heuristic Replanning      |
-| 6 | Stockout -> Compatible Substitution                     | Immunological RBC Cross-Matching    |
-+---+---------------------------------------------------------+-------------------------------------+
-```
-
----
+The simulation includes 6 preset scenarios to demonstrate each algorithmic capability. The numbers and outcomes below match current simulation output.
 
 ### Scenario 1: Single Routine Request
-*Baseline autonomous allocation, point-to-point $A^*$ pathfinding, and full FIPA-ACL negotiation.*
-
-- **Clinical Setup:**
-  - **Hospital:** City General (`H1`).
-  - **Requirement:** 2 units of $A^+$ (Routine surgery, $T_{\text{need}} = 90.0$ min).
-  - **Initial Inventory:** Abundant $A^+$ stock at Central Blood Bank (`CBB`).
-- **Algorithmic Execution:**
-  1. `H1` submits a `REQUEST` to `CBB`.
-  2. `CBB` runs multi-criteria scoring. Because stock is plentiful and no competing requests exist, the request is ranked #1 and marked `FULFILLED`.
-  3. `CBB` executes $A^*$ pathfinding from `CBB` to `H1`: Path is `CBB ➔ J1 ➔ H1` (~9.4 min transit).
-  4. Two units of $A^+$ are allocated via FEFO and loaded into delivery vehicle `VAN-01`.
-  5. `VAN-01` departs, broadcasting periodic `STATUS_UPDATE` telemetry. Upon arrival, `H1` verifies temperature compliance and returns an `ACK`.
-- **Observed Dashboard Behavior:**
-  - **KPI Strip:** Requests: 1, Fulfilled: 1, In Transit: 0 / 2 Delivered, Breaches: 0.
-  - **Map Visualizer:** Route callout card displays active transit path; completed delivery renders as a dotted emerald trail with a delivery success badge.
-  - **Allocation Table:** 1 record: $A^+$, 2 requested, 2 allocated, `FULFILLED`, `On time`.
+- **Setup:** City General (`H1`) requests 2 units of $A^+$ (Routine surgery, $T_{need} = 90.0$ min).
+- **Scores:**
+  - Rank 1: `H1` score = **0.899** ($w_1 \cdot U = 0.350$, $w_2 \cdot T = 0.167$, $w_3 \cdot D = 0.225$, $w_4 \cdot R = 0.157$, $w_5 \cdot \text{wait} = 0.000$).
+- **Execution & Outcome:**
+  - `CBB` allocates 2 units of $A^+$ via FEFO.
+  - Vehicle `VAN-01` dispatches along route `['CBB', 'J1', 'H1']`.
+  - Delivery completes at simulation time $T+9.0$ min.
+  - **Result:** 1 request received, 1 fulfilled, 0 partial, 0 refused, 2 units delivered on time.
 
 ---
 
 ### Scenario 2: Two Hospitals Competing for Scarce O-
-*Contention resolution under extreme supply scarcity, multi-attribute scoring weights, and starvation prevention.*
-
-- **Clinical Setup:**
-  - **Hospital A:** City General (`H1`) submits an **Emergency** need for 2 units of $O^-$ ($T_{\text{need}} = 15.0$ min, polytrauma shock).
-  - **Hospital B:** Apollo (`H3`) submits a **Routine** need for 2 units of $O^-$ ($T_{\text{need}} = 120.0$ min, scheduled sickle cell transfusion).
-  - **Available Stock:** Total $O^-$ stock at `CBB` is restricted to exactly **2 units**. `RBB` $O^-$ stock is also depleted to test refusal handling.
-- **Algorithmic Execution:**
-  1. Both hospitals emit concurrent `REQUEST` messages into `CBB`'s queue.
-  2. Multi-attribute utility scores are computed:
-     - `H1` Score: Urgency (3.0 × 3.0) + Time ($60/15 \times 2.0 = 8.0$) + Deficit + Rarity ($1.0 \times 1.5$) $\approx \mathbf{20.9}$.
-     - `H3` Score: Urgency (1.0 × 3.0) + Time ($60/120 \times 2.0 = 1.0$) + Deficit + Rarity ($1.0 \times 1.5$) $\approx \mathbf{6.2}$.
-  3. `CBB` allocates the remaining 2 units of $O^-$ exclusively to `H1` (`FULFILLED`).
-  4. `H3` is evaluated next. Because zero $O^-$ units remain, `CBB` contacts `RBB` via `BACKUP_REQUEST`.
-  5. `RBB` confirms zero stock and replies with `REFUSE`. `CBB` logs an explicit `REFUSED` decision for `H3` citing stock exhaustion.
-- **Observed Dashboard Behavior:**
-  - **KPI Strip:** Requests: 2, Fulfilled: 1 (0 partial / 1 refused), Delivered: 2 units, On time.
-  - **Allocation Matrix:**
-    - `H1`: Score ~20.9, Outcome `Fulfilled`, Delivery `On time`.
-    - `H3`: Score ~6.2, Outcome `Refused`, Reason: Stock depleted.
+- **Setup:**
+  - `H1` requests 2 units of $O^-$ (Emergency, $T_{need} = 15.0$ min, trauma shock).
+  - `H3` requests 2 units of $O^-$ (Routine, $T_{need} = 120.0$ min, transfusion).
+  - Central Bank stock of $O^-$ is restricted to 2 units. Reserve Bank $O^-$ stock is depleted to test refusal.
+- **Scores:**
+  - Rank 1 (`H1`): score = **2.860** ($w_1 \cdot U = 1.050$, $w_2 \cdot T = 1.000$, $w_3 \cdot D = 0.360$, $w_4 \cdot R = 0.450$).
+  - Rank 2 (`H3`): score = **1.375** ($w_1 \cdot U = 0.350$, $w_2 \cdot T = 0.125$, $w_3 \cdot D = 0.450$, $w_4 \cdot R = 0.450$).
+- **Execution & Outcome:**
+  - `CBB` awards the 2 available $O^-$ units to `H1` (`FULFILLED`).
+  - `VAN-01` delivers to `H1` along `['CBB', 'J1', 'H1']` at $T+9.0$ min on time.
+  - `H3` cannot be fulfilled due to total stock exhaustion. A `BACKUP_REQUEST` to `RBB` is refused.
+  - **Result:** 2 requests received, 1 fulfilled, 0 partial, 1 refused, 2 units delivered on time.
 
 ---
 
-### Scenario 3: Mass-Casualty Incident (4 Hospitals at Once)
-*High-concurrency trauma queue arbitration across multiple blood groups.*
-
-- **Clinical Setup:**
-  - **Incident:** Multiple major trauma events across the city.
-  - **H1 (City General):** 3 units $O^-$ (Emergency, $T_{\text{need}} = 15$ min, Highway collision).
-  - **H2 (St. Mary's):** 4 units $A^+$ (Emergency, $T_{\text{need}} = 20$ min, Industrial explosion).
-  - **H4 (Govt Medical College):** 3 units $B^+$ (Urgent, $T_{\text{need}} = 45$ min, Obstetric hemorrhage).
-  - **H5 (Children's Hospital):** 2 units $O^+$ (Urgent, $T_{\text{need}} = 60$ min, Pediatric surgery).
-- **Algorithmic Execution:**
-  1. All 4 requirements are ingested into `CBB`'s pending queue.
-  2. `greedy_priority_allocation()` ranks all 4 requests into a max-heap:
-     - Rank 1: `H1` ($O^-$, Emergency)
-     - Rank 2: `H2` ($A^+$, Emergency)
-     - Rank 3: `H4` ($B^+$, Urgent)
-     - Rank 4: `H5` ($O^+$, Urgent)
-  3. Inventory is allocated in strict score order using FEFO shelf-life ordering.
-  4. Delivery fleet dispatches vehicles along optimal $A^*$ trajectories.
-- **Observed Dashboard Behavior:**
-  - **Allocation Table:** Displays complete 4-row matrix with color-coded stacked bar breakdowns (Urgency, Time-to-Need, Deficit, Rarity, Waiting).
-  - **Map Visualizer:** Multiple simultaneous delivery traces animating across the urban road topology.
+### Scenario 3: Mass-Casualty Incident (4 Hospitals)
+- **Setup:** 4 concurrent hospital trauma requests:
+  - `H1`: 3 units $O^-$ (Emergency, $T_{need} = 15$ min)
+  - `H2`: 4 units $A^+$ (Emergency, $T_{need} = 20$ min)
+  - `H4`: 3 units $B^+$ (Urgent, $T_{need} = 45$ min)
+  - `H5`: 2 units $O^+$ (Urgent, $T_{need} = 60$ min)
+- **Scores:**
+  - Rank 1 (`H1`): score = **2.860**
+  - Rank 2 (`H2`): score = **2.228**
+  - Rank 3 (`H4`): score = **1.495**
+  - Rank 4 (`H5`): score = **1.445**
+- **Execution & Outcome:**
+  - All 4 requests are marked `FULFILLED` in score order.
+  - Central Bank vehicles dispatch: `VAN-01` to `H4` via `['CBB', 'J1', 'J3', 'H4']` and `VAN-02` to `H5` via `['CBB', 'J4', 'H5']`.
+  - **Result:** 4 requests received, 4 fulfilled, 0 partial, 0 refused, 5 units delivered on time.
 
 ---
 
-### Scenario 4: Temperature Breach Mid-Delivery → Backup from Reserve
-*Forward-chaining safety rule execution, cargo quarantine, and dual-bank backup sourcing.*
-
-- **Clinical Setup:**
-  - **Hospital:** Govt Medical College (`H4`).
-  - **Requirement:** 2 units of $B^-$ (Emergency, $T_{\text{need}} = 25$ min).
-  - **Distances:** `H4` is situated closer to the Reserve Blood Bank (`RBB`) than `CBB`.
-- **Algorithmic Execution:**
-  1. `CBB` allocates 2 units of $B^-$ and dispatches vehicle `VAN-01`.
-  2. At simulation $T+2.0$, a refrigeration failure is injected: onboard temperature spikes above $10.0^\circ\text{C}$.
-  3. The Horn-clause rule engine detects 3 consecutive out-of-band readings ($T > 10.0^\circ\text{C}$).
-  4. **Rule 1 fires:** `VAN-01` marks cargo `QUARANTINED` and transmits `BREACH_ALERT` to `CBB`.
-  5. `CBB` compares $A^*$ travel times to `H4`:
-     - $A^*(CBB, H4) \approx 13.8$ min
-     - $A^*(RBB, H4) \approx 7.2$ min
-  6. `CBB` determines `RBB` is closer and emits `BACKUP_REQUEST` to `RBB`.
-  7. `RBB` accepts, allocates replacement units from reserve inventory, and dispatches backup vehicle `VAN-03`.
-  8. `VAN-03` completes rapid emergency delivery to `H4` within clinical deadlines.
-- **Observed Dashboard Behavior:**
-  - **KPI Strip:** Breaches: 1 (quarantined and highlighted in critical red).
-  - **Breach Alert Banner:** Prominent red callout displaying vehicle ID, temperature, and backup sourcing action.
-  - **Telemetry Graph:** Temperature curve spikes above the red dashed upper bound ($10^\circ\text{C}$), followed by the backup vehicle's compliant telemetry curve ($2^\circ\text{C} - 4^\circ\text{C}$).
+### Scenario 4: Temperature Breach Mid-Delivery -> Backup from Reserve
+- **Setup:** `H4` requests 2 units of $B^-$ (Emergency, $T_{need} = 25$ min).
+- **Scores:**
+  - Rank 1 (`H4`): score = **2.347** ($w_1 \cdot U = 1.050$, $w_2 \cdot T = 0.600$, $w_3 \cdot D = 0.337$, $w_4 \cdot R = 0.360$).
+- **Execution & Outcome:**
+  - `CBB` allocates 2 units of $B^-$ and dispatches `VAN-01` along `['CBB', 'J1', 'J3', 'H4']`.
+  - At $T+2.0$, refrigeration failure occurs. Onboard temperature exceeds $10^\circ\text{C}$ (reaching 60.8°C).
+  - After 3 consecutive out-of-band readings, Rule 1 fires: cargo is quarantined and `BREACH_ALERT` is sent.
+  - `CBB` evaluates distances: Reserve Bank (`RBB`) is closer to `H4` than `CBB`.
+  - `CBB` sends `BACKUP_REQUEST` to `RBB`. `RBB` dispatches `VAN-03` along `['RBB', 'J7', 'J6', 'H4']`.
+  - Replacement cargo is delivered to `H4` at $T+38.0$ min.
+  - **Result:** 1 request received, 1 fulfilled, 2 units quarantined, 3 units delivered (replacement arrived `Late by 13 min` relative to the original 25-minute deadline).
 
 ---
 
-### Scenario 5: Traffic Jam (A* Dynamic Re-Routing)
-*Real-time heuristic replanning under sudden road network disruption.*
-
-- **Clinical Setup:**
-  - **Hospital:** Children's Hospital (`H5`).
-  - **Requirement:** 2 units of $AB^+$ (Urgent, $T_{\text{need}} = 40$ min).
-  - **Network Perturbation:** A severe traffic obstruction is injected on the primary Central Arterial corridor (`CBB ➔ J4`), increasing edge delay factor to **3.0x**.
-- **Algorithmic Execution:**
-  1. Under baseline clear conditions, the shortest route from `CBB` to `H5` is `CBB ➔ J4 ➔ H5` (~13.1 min).
-  2. With the 3.0x delay applied to `CBB ➔ J4`, the effective travel time across that edge surges from 8.5 min to 25.5 min.
-  3. The delivery vehicle evaluates route options using $A^*$:
-     - Path A (`CBB ➔ J4 ➔ H5`): $25.5 + 4.6 = 30.1$ min.
-     - Path B (`CBB ➔ J1 ➔ J3 ➔ H5` via Western Avenue): $5.0 + 7.5 + 6.0 = 18.5$ min.
-  4. $A^*$ autonomously discovers and adopts Path B, avoiding the congested central corridor and saving over 11 minutes in transit time.
-- **Observed Dashboard Behavior:**
-  - **Map Visualizer:** The congested road segment (`CBB–J4`) highlights in bold crimson; the active delivery route visualizer displays the vehicle taking the outer western bypass corridor.
-  - **Route Callout Card:** Explicitly details the alternate waypoint hops and revised transit time.
+### Scenario 5: Traffic-Aware Route Selection
+- **Setup:**
+  - Heavy traffic congestion is pre-set on the Central Arterial road `CBB ➔ J4` (delay factor = 3.0x).
+  - Children's Hospital (`H5`) requests 2 units of $AB^+$ (Urgent, $T_{need} = 40$ min).
+- **Scores:**
+  - Rank 1 (`H5`): score = **1.390** ($w_1 \cdot U = 0.700$, $w_2 \cdot T = 0.375$, $w_3 \cdot D = 0.225$, $w_4 \cdot R = 0.090$).
+- **Execution & Outcome:**
+  - Baseline route `['CBB', 'J4', 'H5']` has effective travel time increased to ~30.1 minutes due to the 3.0x delay on `CBB–J4`.
+  - $A^*$ evaluates alternatives and selects the eastern corridor `['CBB', 'J2', 'J5', 'H5']` (~17.0 minutes).
+  - `VAN-01` dispatches via `['CBB', 'J2', 'J5', 'H5']` and delivers at $T+17.0$ min.
+  - **Result:** 1 request received, 1 fulfilled, 2 units delivered on time, bypassing the congested corridor.
 
 ---
 
-### Scenario 6: Stockout → Compatible Substitution
-*Clinical erythrocyte antigen cross-matching under exact-match inventory depletion.*
-
-- **Clinical Setup:**
-  - **Hospital:** St. Mary's (`H2`).
-  - **Requirement:** 3 units of $B^+$ (Urgent, $T_{\text{need}} = 35$ min).
-  - **Inventory Constraint:** $B^+$ inventory at Central Blood Bank is **completely depleted** (0 units available).
-  - **Compatible Stock:** Central Bank holds sufficient universal donor $O^+$ units.
-- **Algorithmic Execution:**
-  1. `H2` submits `REQUEST` for 3 units of $B^+$.
-  2. `CBB` checks exact stock for $B^+$: Available = 0.
-  3. Allocation invokes the RBC Compatibility Matrix for recipient $B^+$:
-     - Permissible donor hierarchy: $[B^+, B^-, O^+, O^-]$.
-  4. Engine finds available $O^+$ units and allocates 3 units of $O^+$ under FEFO shelf-life ordering.
-  5. The decision is recorded as `FULFILLED` with an explicit notice: `Compatible donor substitution: O+ allocated for B+ requirement`.
-- **Observed Dashboard Behavior:**
-  - **Allocation Decision Table:** Shows requested type as $B^+$, allocated type as $O^+$, outcome `Fulfilled`, with full substitution explanation.
-  - **Delivery Card:** Details that 3 units of compatible $O^+$ are en route to `H2`.
+### Scenario 6: Stockout -> Compatible Substitution
+- **Setup:**
+  - Central Bank stock of $B^+$ is 0 units (depleted).
+  - St. Mary's (`H2`) requests 3 units of $B^+$ (Urgent, $T_{need} = 35$ min).
+  - Central Bank maintains stock of compatible $B^-$ units.
+- **Scores:**
+  - Rank 1 (`H2`): score = **1.579** ($w_1 \cdot U = 0.700$, $w_2 \cdot T = 0.429$, $w_3 \cdot D = 0.270$, $w_4 \cdot R = 0.180$).
+- **Execution & Outcome:**
+  - Exact match for $B^+$ is exhausted. The compatibility matrix identifies $B^-$ as a valid substitute.
+  - 3 units of $B^-$ are allocated under FEFO.
+  - `VAN-01` delivers to `H2` via `['CBB', 'J2', 'H2']` at $T+8.0$ min.
+  - **Result:** 1 request received, 1 fulfilled, 3 units delivered on time with recorded compatible substitution ($B^-$ for $B^+$).
 
 ---
 
-## 🖥️ User Interface & Operations Dashboard
+## Installation and Test Execution
 
-The dashboard provides a high-density, real-time command center built for clinical logistics coordinators.
-
-```
-+--------------------------------------------------------------------------------------------------+
-| MULTI-AGENT BLOOD SUPPLY & COLD-CHAIN MANAGEMENT                                     CLOCK: T+12 |
-+--------------------------------------------------------------------------------------------------+
-| [ REQUESTS ]           [ FULFILLED ]            [ IN TRANSIT / DELIV ]       [ BREACHES ]        |
-| 2                      1                        0 / 2                        0                   |
-| 0 pending              0 partial / 1 refused    On time · 2 delivered        0 within safe band  |
-+--------------------------------------------------------------------------------------------------+
-| REGIONAL NETWORK MAP (60%)                      | CLINICAL INTAKE & INVENTORY (40%)              |
-| +---------------------------------------------+ | +--------------------------------------------+ |
-| | [✓ Delivery Completed (On time)]            | | | PENDING REQUIREMENTS                       | |
-| | Delivered 2 units (O-) to H1 via VAN-01     | | | - No unallocated requests pending          | |
-| |                                             | | +--------------------------------------------+ |
-| |  [H1] -------- [J1] -------- [CBB]          | | | CENTRAL BANK STOCK                         | |
-| |    \             |             /            | | | O+ [====================] 18               | |
-| |     \            |            /             | | | O- [====] 4                                | |
-| |     [J3] ------ [J4] ------ [J2]            | | | A+ [==============  ] 12                   | |
-| |       \          |         /   \            | | | ...                                        | |
-| |       [H5]     [H4]      [H2]  [RBB]        | | +--------------------------------------------+ |
-| +---------------------------------------------+ | [ Quick Hospital Intake: H1 | H2 | H3 | H4 ] | |
-+--------------------------------------------------------------------------------------------------+
-| ALLOCATION RESULT (Greedy Priority Score Breakdown Table)                                        |
-+--------------------------------------------------------------------------------------------------+
-| DELIVERIES & REAL-TIME COLD-CHAIN TEMPERATURE TELEMETRY GRAPH                                    |
-+--------------------------------------------------------------------------------------------------+
-| AGENT COMMUNICATION LOG & FIPA-ACL INTERACTION TIMELINE                                          |
-+--------------------------------------------------------------------------------------------------+
-```
-
-### Dashboard Features:
-1. **Clinical KPI Strip:** Real-time consolidated counters: total requests received, fulfilled/partial/refused split, active in-transit vehicles vs units delivered, and quarantined breach tallies.
-2. **Prominent Route & Delivery Status Callout Card:** Positioned above the map; displays active waypoints (`➔`), vehicle IDs, transit speeds, remaining ETAs, and cold-chain status.
-3. **Interactive 2D Topology Visualizer:** Displays hospitals, blood banks, junctions, and roads. Includes active vehicle markers with direction labels (`🚐 VAN-01 ➔ City General`) and completed green delivery traces. Clicking any hospital opens a clinical intake modal.
-4. **Interactive Clinical Request Dialog (`@st.dialog`):** Allows users to submit custom blood requests on demand, specifying blood type, units, clinical urgency, time-to-need, and surgical indication.
-5. **Allocation Decision Matrix:** Full transparency into algorithm scoring. Displays rank, hospital, blood type, units allocated, total score, and a stacked color-coded bar visualizing individual score components (Urgency, Time-to-Need, Deficit, Rarity, Waiting).
-6. **Live Sensor Telemetry:** Real-time Plotly line chart plotting vehicle internal temperature readings against upper ($10^\circ\text{C}$) and lower ($1^\circ\text{C}$) safety boundaries.
-7. **FIPA-ACL Interaction Timeline:** Interactive sequence-style chart documenting every message exchange between agents.
-
----
-
-## 🚀 Quickstart & Installation
-
-### 1. System Requirements
+### 1. Requirements
 - Python 3.11, 3.12, or 3.13
 - Git
 
-### 2. Installation
+### 2. Setup
 ```bash
-# Clone repository
 git clone https://github.com/Gnanesh-12/Multi-Agent-Blood-Supply-and-Cold-Chain-Management.git
 cd Multi-Agent-Blood-Supply-and-Cold-Chain-Management
 
-# Create and activate virtual environment
 python -m venv venv
 
 # Windows (PowerShell):
@@ -446,67 +363,61 @@ venv\Scripts\activate.bat
 # Linux/macOS:
 source venv/bin/activate
 
-# Install dependencies
 pip install -r requirements.txt
 ```
 
-### 3. Launching the Platform
+### 3. Run the Dashboard
 ```bash
 streamlit run app.py
 ```
-Open [http://localhost:8501](http://localhost:8501) in any modern browser.
+Open [http://localhost:8501](http://localhost:8501) in your browser.
 
----
-
-## 🧪 Automated Verification & Test Suite
-
-The system includes a test suite covering algorithmic optimality, edge cases, safety rules, and seed determinism.
-
+### 4. Run the Test Suite
 ```bash
 python -m pytest
 ```
 
-### Test Suite Coverage:
-
-| Test Module | Test Focus & Verification Criteria |
-| :--- | :--- |
-| [`tests/test_astar.py`](file:///c:/Users/GNANESH%20KHANDAVILLI/OneDrive/Desktop/Gnanesh/Multi-Agent-Blood-Supply-and-Cold-Chain-Management/tests/test_astar.py) | - Validates $A^*$ optimality against uniform-cost Dijkstra.<br>- Verifies Euclidean heuristic admissibility ($h(n) \le h^*(n)$ across all node pairs).<br>- Tests dynamic re-routing when edge delay factors increase. |
-| [`tests/test_allocation.py`](file:///c:/Users/GNANESH%20KHANDAVILLI/OneDrive/Desktop/Gnanesh/Multi-Agent-Blood-Supply-and-Cold-Chain-Management/tests/test_allocation.py) | - Validates multi-attribute scoring ranking order.<br>- Proves aging term prevents starvation of low-urgency routine requests.<br>- Verifies FEFO shelf-life sorting.<br>- Verifies RBC compatibility substitutions ($O^+$ for $B^+$, $O^-$ for $A^-$). |
-| [`tests/test_rules.py`](file:///c:/Users/GNANESH%20KHANDAVILLI/OneDrive/Desktop/Gnanesh/Multi-Agent-Blood-Supply-and-Cold-Chain-Management/tests/test_rules.py) | - Tests hyperthermia ($>10^\circ\text{C}$) and hypothermia ($<1^\circ\text{C}$) breach counters.<br>- Verifies debouncing logic resets when readings return to safe band.<br>- Tests product shelf-life expiration rule. |
-| [`tests/test_scenarios.py`](file:///c:/Users/GNANESH%20KHANDAVILLI/OneDrive/Desktop/Gnanesh/Multi-Agent-Blood-Supply-and-Cold-Chain-Management/tests/test_scenarios.py) | - End-to-end integration test of temperature breach and dual-bank backup sourcing.<br>- Validates FIPA-ACL message sequence and performatives.<br>- Tests simulation determinism across identical random seeds.<br>- Verifies KPI metrics maintain accurate accounting after full delivery completion. |
-| [`tests/test_autonomous_allocation_and_deadlines.py`](file:///c:/Users/GNANESH%20KHANDAVILLI/OneDrive/Desktop/Gnanesh/Multi-Agent-Blood-Supply-and-Cold-Chain-Management/tests/test_autonomous_allocation_and_deadlines.py) | - Verifies autonomous greedy allocation triggers on clock step.<br>- Tests deadline calculation ($T_{\text{created}} + T_{\text{need}}$).<br>- Validates on-time vs late status determination. |
-| [`tests/test_map_route_and_destination_visibility.py`](file:///c:/Users/GNANESH%20KHANDAVILLI/OneDrive/Desktop/Gnanesh/Multi-Agent-Blood-Supply-and-Cold-Chain-Management/tests/test_map_route_and_destination_visibility.py) | - Validates rendering of active glowing route traces.<br>- Verifies completed route emerald lines and destination status callout cards. |
+The test suite covers:
+- `tests/test_astar.py`: $A^*$ optimality, admissibility check across all node pairs, Dijkstra comparison, traffic delay re-routing.
+- `tests/test_allocation.py`: Priority scoring order, aging starvation prevention, FEFO sorting, RBC compatibility substitutions.
+- `tests/test_rules.py`: Hyperthermia/hypothermia threshold counters, noise debouncing reset, shelf-life expiration.
+- `tests/test_scenarios.py`: End-to-end breach backup recovery, message sequences, seed determinism, and KPI accounting.
+- `tests/test_autonomous_allocation_and_deadlines.py`: Autonomous clock-step allocation, deadline tracking, and status labels.
+- `tests/test_map_route_and_destination_visibility.py`: Route tracing and status card rendering.
 
 ---
 
-## 🏛️ Codebase Organization & Scalability
+## Codebase Structure
 
 ```
 Multi-Agent-Blood-Supply-and-Cold-Chain-Management/
-├── app.py                      # Streamlit UI presentation layer (clean presentation only)
-├── requirements.txt            # Pinned production dependencies
+├── app.py                      # Streamlit UI dashboard
+├── requirements.txt            # Pinned dependencies
+├── LICENSE                     # MIT License
 ├── assets/
-│   └── style.css               # Clinical design tokens, KPI cards, and typography
+│   └── style.css               # Clinical dashboard styling tokens
 ├── config/
-│   └── city.yaml               # Network topology, coordinates, road speeds, initial stock
+│   └── city.yaml               # Graph topology, coordinates, road speeds, stock levels
+├── docs/
+│   └── CASE_STUDY.md           # PEAS analysis and environment classification
 ├── src/
-│   ├── blood.py                # BloodType enum, BloodUnit, FEFO, RBC compatibility matrix
+│   ├── blood.py                # BloodType enum, BloodUnit, FEFO, RBC compatibility
 │   ├── city.py                 # CityNetwork topology, Euclidean distance, delay factors
 │   ├── messaging.py            # FIPA-ACL performatives, Message dataclass, MessageBus
 │   ├── rules.py                # Horn-clause SafetyRuleEngine (cold chain & shelf-life)
-│   ├── simulation.py           # SimulationEngine coordinator (headless core)
-│   ├── ui_helpers.py           # Base UI helpers
+│   ├── simulation.py           # SimulationEngine coordinator (discrete-time clock)
+│   ├── ui_helpers.py           # Baseline UI formatting functions
 │   ├── agents/
-│   │   ├── base.py             # BaseAgent (perceive-decide-act lifecycle)
-│   │   ├── hospital.py         # HospitalAgent (clinical need & inventory tracking)
-│   │   ├── blood_bank.py       # BloodBankAgent (CBB & RBB priority allocation & dispatch)
-│   │   └── delivery.py         # DeliveryAgent (A* navigation, thermal sensory step)
+│   │   ├── base.py             # BaseAgent (perceive-decide-act loop)
+│   │   ├── hospital.py         # HospitalAgent (need tracking & receipt)
+│   │   ├── blood_bank.py       # BloodBankAgent (CBB & RBB priority allocation)
+│   │   └── delivery.py         # DeliveryAgent (A* navigation, thermal sensing)
 │   ├── planning/
 │   │   ├── astar.py            # Hand-crafted A* search & Dijkstra baseline
-│   │   └── allocation.py       # Multi-criteria scoring, greedy heap, compatibility
+│   │   └── allocation.py       # Urgency scoring, priority heap, substitutions
 │   └── ui/
-│       ├── components.py       # Modular UI components (KPI strip, callout card, tables)
-│       └── plot_theme.py       # Plotly figure builders (2D map, telemetry curves, timeline)
+│       ├── components.py       # KPI strip, callout cards, decision tables
+│       └── plot_theme.py       # Plotly map, telemetry graph, message timeline
 └── tests/
     ├── test_allocation.py
     ├── test_astar.py
@@ -516,13 +427,7 @@ Multi-Agent-Blood-Supply-and-Cold-Chain-Management/
     └── test_scenarios.py
 ```
 
-### Key Engineering Principles:
-1. **Zero Hardcoded Geography:** All hospital coordinates, bank locations, road connections, base velocities, and initial blood inventories are externalized in [config/city.yaml](file:///c:/Users/GNANESH%20KHANDAVILLI/OneDrive/Desktop/Gnanesh/Multi-Agent-Blood-Supply-and-Cold-Chain-Management/config/city.yaml). Adding a new medical center or adjusting regional traffic is achieved entirely via configuration.
-2. **Headless & Testable Core:** The `SimulationEngine` contains zero Streamlit dependencies. It can run in continuous background mode, CLI scripts, or automated CI test harnesses.
-3. **Decoupled Asynchronous Messaging:** Agents possess no private references to other agents' internals; all coordination occurs via explicit, auditable FIPA-ACL messages routed through the `MessageBus`.
-4. **Deterministic Reproducibility:** Simulation runs accept an optional seed parameter ensuring that complex stochastic events (e.g. ambient thermal fluctuations) can be deterministically reproduced.
-
----
-
-## 📜 License
-This project is licensed under the MIT License - see the LICENSE file for details.
+### Design Notes:
+- **Centralized Configuration:** All coordinates, road lengths, baseline speeds, and initial blood inventories are defined in [config/city.yaml](config/city.yaml).
+- **Headless Core:** [src/simulation.py](src/simulation.py) contains no Streamlit imports, enabling automated command-line execution and pytest verification.
+- **Explicit Messaging:** Agents maintain no private cross-agent references; all interactions are mediated through the `MessageBus`.
