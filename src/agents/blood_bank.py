@@ -58,6 +58,10 @@ class BloodBankAgent(BaseAgent):
         else:
             self.vehicle_ids = ["VAN-03", "VAN-04"]
         self._next_vehicle_idx = 0
+        self.busy_vehicles: Dict[str, str] = {}  # {vehicle_id: request_id}
+        self.quarantined_vehicles: set[str] = set()
+        self.pending_dispatches: List[AllocationDecision] = []
+        self.breached_requests: set[str] = set()
 
     def initialize_inventory(self, initial_counts: Dict[str, int], base_shelf_life_mins: float = 300.0) -> None:
         """Seed initial inventory with staggered expiration times for FEFO testing."""
@@ -85,8 +89,15 @@ class BloodBankAgent(BaseAgent):
     def get_total_stock(self) -> int:
         return sum(1 for u in self.inventory if u.status == BloodUnitStatus.IN_STOCK)
 
+    def get_free_vehicle_id(self) -> Optional[str]:
+        """Return first free vehicle from bank pool, or None if all are currently dispatched/quarantined."""
+        for veh_id in self.vehicle_ids:
+            if veh_id not in self.busy_vehicles and veh_id not in self.quarantined_vehicles:
+                return veh_id
+        return None
+
     def get_next_vehicle_id(self) -> str:
-        """Select next vehicle from bank pool in round-robin fashion."""
+        """Select next vehicle from bank pool in round-robin fashion (fallback)."""
         veh_id = self.vehicle_ids[self._next_vehicle_idx % len(self.vehicle_ids)]
         self._next_vehicle_idx += 1
         return veh_id
@@ -104,6 +115,7 @@ class BloodBankAgent(BaseAgent):
             Performative.PROPOSE,
             Performative.REFUSE,
             Performative.BREACH_ALERT,
+            Performative.ACK,
         ):
             self.perceive(message.timestamp)
 
@@ -128,7 +140,15 @@ class BloodBankAgent(BaseAgent):
             elif msg.performative == Performative.BREACH_ALERT:
                 self._handle_breach_alert(msg, current_time)
             elif msg.performative == Performative.ACK:
-                pass  # Hospital acknowledged receipt
+                self._handle_ack(msg, current_time)
+
+    def _handle_ack(self, msg: Message, current_time: float) -> None:
+        """Process ACK from hospital: mark vehicle returned and dispatch next queued request."""
+        p = msg.payload
+        veh_id = p.get("vehicle_id")
+        if veh_id and veh_id in self.busy_vehicles:
+            del self.busy_vehicles[veh_id]
+        self._dispatch_next_pending(current_time)
 
     def _handle_request_msg(self, msg: Message) -> None:
         p = msg.payload
@@ -160,7 +180,8 @@ class BloodBankAgent(BaseAgent):
 
         if allocated:
             rbb_plan = astar_search(self.city_network, self.agent_id, dest_hospital)
-            veh_id = self.get_next_vehicle_id()
+            veh_id = self.get_free_vehicle_id() or self.get_next_vehicle_id()
+            self.busy_vehicles[veh_id] = req_id
 
             # 1. Reply PROPOSE to CBB
             self.send(
@@ -296,6 +317,12 @@ class BloodBankAgent(BaseAgent):
         blood_type = p.get("blood_type", "O-")
         units_count = int(p.get("units_count", 1))
 
+        # Quarantine vehicle from bank's active pool
+        if vehicle_id:
+            self.quarantined_vehicles.add(vehicle_id)
+            if vehicle_id in self.busy_vehicles:
+                del self.busy_vehicles[vehicle_id]
+
         # Quarantine internal units if tracked
         quarantined_ids = p.get("unit_ids", [])
         for u in self.inventory:
@@ -317,8 +344,12 @@ class BloodBankAgent(BaseAgent):
             conversation_id=req_id,
         )
 
-        # 2. Trigger backup sourcing to deliver replacement units
-        # Send BACKUP_REQUEST to peer Reserve Bank
+        # Prevent duplicate backup requests for the same breach
+        if req_id in self.breached_requests:
+            return
+        self.breached_requests.add(req_id)
+
+        # 2. Trigger backup sourcing immediately in the same tick
         peer_bank = "RBB" if self.agent_id == "CBB" else "CBB"
         orig_req = self.request_registry.get(req_id)
         req_created = orig_req.created_at_sim_time if orig_req else current_time
@@ -404,52 +435,75 @@ class BloodBankAgent(BaseAgent):
             deadline = req_created + req_ttn
 
             if d.outcome in (AllocationOutcome.FULFILLED, AllocationOutcome.PARTIAL):
-                # Central Bank fulfilled units!
+                # Vehicle assignment must follow allocation rank
+                free_veh = self.get_free_vehicle_id()
                 astar_plan = astar_search(self.city_network, self.agent_id, d.hospital_id)
-                veh_id = self.get_next_vehicle_id()
 
-                # 1. Inform requesting hospital
-                self.send(
-                    receiver=d.hospital_id,
-                    performative=Performative.INFORM,
-                    payload={
-                        "request_id": d.request_id,
-                        "status": "APPROVED",
-                        "units_allocated": d.units_allocated,
-                        "blood_type": d.blood_type_requested,
-                        "rank": d.rank,
-                        "score": d.score_breakdown.total_score,
-                        "vehicle_id": veh_id,
-                        "eta_minutes": round(astar_plan.cost_minutes, 1),
-                        "deadline": deadline,
-                    },
-                    timestamp=current_time,
-                    conversation_id=d.request_id,
-                )
+                if free_veh is not None:
+                    self.busy_vehicles[free_veh] = d.request_id
 
-                # 2. Dispatch specific delivery vehicle
-                self.send(
-                    receiver=veh_id,
-                    performative=Performative.DISPATCH,
-                    payload={
-                        "request_id": d.request_id,
-                        "destination_hospital": d.hospital_id,
-                        "source_bank": self.agent_id,
-                        "units": d.allocated_units,
-                        "units_count": d.units_allocated,
-                        "blood_type": d.blood_type_requested,
-                        "unit_ids": [u.unit_id for u in d.allocated_units],
-                        "route": astar_plan.path,
-                        "eta_minutes": astar_plan.cost_minutes,
-                        "rank": d.rank,
-                        "total_score": d.score_breakdown.total_score,
-                        "created_at": req_created,
-                        "time_to_need": req_ttn,
-                        "deadline": deadline,
-                    },
-                    timestamp=current_time,
-                    conversation_id=d.request_id,
-                )
+                    # 1. Inform requesting hospital
+                    self.send(
+                        receiver=d.hospital_id,
+                        performative=Performative.INFORM,
+                        payload={
+                            "request_id": d.request_id,
+                            "status": "APPROVED",
+                            "units_allocated": d.units_allocated,
+                            "blood_type": d.blood_type_requested,
+                            "rank": d.rank,
+                            "score": d.score_breakdown.total_score,
+                            "vehicle_id": free_veh,
+                            "eta_minutes": round(astar_plan.cost_minutes, 1),
+                            "deadline": deadline,
+                        },
+                        timestamp=current_time,
+                        conversation_id=d.request_id,
+                    )
+
+                    # 2. Dispatch specific free delivery vehicle
+                    self.send(
+                        receiver=free_veh,
+                        performative=Performative.DISPATCH,
+                        payload={
+                            "request_id": d.request_id,
+                            "destination_hospital": d.hospital_id,
+                            "source_bank": self.agent_id,
+                            "units": d.allocated_units,
+                            "units_count": d.units_allocated,
+                            "blood_type": d.blood_type_requested,
+                            "unit_ids": [u.unit_id for u in d.allocated_units],
+                            "route": astar_plan.path,
+                            "eta_minutes": astar_plan.cost_minutes,
+                            "rank": d.rank,
+                            "total_score": d.score_breakdown.total_score,
+                            "created_at": req_created,
+                            "time_to_need": req_ttn,
+                            "deadline": deadline,
+                        },
+                        timestamp=current_time,
+                        conversation_id=d.request_id,
+                    )
+                else:
+                    # More fulfilled requests than free vehicles: queue in rank order
+                    self.pending_dispatches.append(d)
+                    self.send(
+                        receiver=d.hospital_id,
+                        performative=Performative.INFORM,
+                        payload={
+                            "request_id": d.request_id,
+                            "status": "APPROVED",
+                            "units_allocated": d.units_allocated,
+                            "blood_type": d.blood_type_requested,
+                            "rank": d.rank,
+                            "score": d.score_breakdown.total_score,
+                            "vehicle_id": "QUEUED",
+                            "eta_minutes": round(astar_plan.cost_minutes, 1),
+                            "deadline": deadline,
+                        },
+                        timestamp=current_time,
+                        conversation_id=d.request_id,
+                    )
             else:
                 # Central Bank has shortfall/stockout: initiate backup sourcing to Reserve Bank before refusal
                 shortfall = d.units_requested - d.units_allocated
@@ -479,15 +533,98 @@ class BloodBankAgent(BaseAgent):
 
         return decisions
 
+    def _dispatch_next_pending(self, current_time: float) -> None:
+        """Dispatch queued allocation decisions in rank order as free vehicles return."""
+        while self.pending_dispatches:
+            free_veh = self.get_free_vehicle_id()
+            if not free_veh:
+                break
+            d = self.pending_dispatches.pop(0)
+            orig_req = self.request_registry.get(d.request_id)
+            req_created = orig_req.created_at_sim_time if orig_req else current_time
+            req_ttn = orig_req.time_to_need_minutes if orig_req else 60.0
+            deadline = req_created + req_ttn
+
+            astar_plan = astar_search(self.city_network, self.agent_id, d.hospital_id)
+            self.busy_vehicles[free_veh] = d.request_id
+
+            # 1. Inform requesting hospital of vehicle assignment
+            self.send(
+                receiver=d.hospital_id,
+                performative=Performative.INFORM,
+                payload={
+                    "request_id": d.request_id,
+                    "status": "APPROVED",
+                    "units_allocated": d.units_allocated,
+                    "blood_type": d.blood_type_requested,
+                    "rank": d.rank,
+                    "score": d.score_breakdown.total_score,
+                    "vehicle_id": free_veh,
+                    "eta_minutes": round(astar_plan.cost_minutes, 1),
+                    "deadline": deadline,
+                },
+                timestamp=current_time,
+                conversation_id=d.request_id,
+            )
+
+            # 2. Dispatch the returned delivery vehicle
+            self.send(
+                receiver=free_veh,
+                performative=Performative.DISPATCH,
+                payload={
+                    "request_id": d.request_id,
+                    "destination_hospital": d.hospital_id,
+                    "source_bank": self.agent_id,
+                    "units": d.allocated_units,
+                    "units_count": d.units_allocated,
+                    "blood_type": d.blood_type_requested,
+                    "unit_ids": [u.unit_id for u in d.allocated_units],
+                    "route": astar_plan.path,
+                    "eta_minutes": astar_plan.cost_minutes,
+                    "rank": d.rank,
+                    "total_score": d.score_breakdown.total_score,
+                    "created_at": req_created,
+                    "time_to_need": req_ttn,
+                    "deadline": deadline,
+                },
+                timestamp=current_time,
+                conversation_id=d.request_id,
+            )
+
+    def add_restock_units(self, blood_type: str, count: int, sim_time: float) -> List[BloodUnit]:
+        """Add newly arrived units to inventory (restock event) and re-evaluate deferred requests."""
+        new_units = []
+        for i in range(count):
+            unit_id = f"U-{self.agent_id}-{blood_type.replace('+', 'P').replace('-', 'N')}-R{int(sim_time):02d}-{i+1:02d}"
+            unit = BloodUnit(
+                unit_id=unit_id,
+                blood_type=blood_type,
+                expiry_time=sim_time + 360.0,
+                status=BloodUnitStatus.IN_STOCK,
+                source_bank=self.agent_id,
+            )
+            self.inventory.append(unit)
+            new_units.append(unit)
+
+        # Re-evaluate deferred requests with aging priority bonus
+        if self.deferred_requests:
+            self.pending_requests.extend(self.deferred_requests)
+            self.deferred_requests.clear()
+            self.run_allocation(sim_time)
+
+        return new_units
+
     def step(self, current_time: float) -> None:
         """Autonomous agent execution cycle for the current simulation tick:
         1. Perceive incoming messages and update request queue.
         2. If central bank and has pending requests, run greedy priority allocation.
-        3. Deliberate and act.
+        3. Dispatch queued allocations if vehicles are available.
+        4. Deliberate and act.
         """
         self.perceive(current_time)
         if self.bank_type == "central_bank" and self.pending_requests:
             self.run_allocation(current_time)
+        self._dispatch_next_pending(current_time)
         self.decide(current_time)
         self.act(current_time)
 

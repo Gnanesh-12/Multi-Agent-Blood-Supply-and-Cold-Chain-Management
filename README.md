@@ -3,8 +3,6 @@
 [![Python Version](https://img.shields.io/badge/Python-3.11%20%7C%203.12%20%7C%203.13-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Course:** Foundations of Artificial Intelligence  
-**Author / Team:** Gnanesh Khandavilli  
 **Case Study Document:** [docs/CASE_STUDY.md](docs/CASE_STUDY.md) (Detailed PEAS analysis and Russell & Norvig environment characterization)
 
 ---
@@ -48,11 +46,11 @@ This project implements a **synchronous discrete-time simulation** of an urban b
 
 The Streamlit web interface ([app.py](app.py)) provides an interactive view of the simulation:
 
-1. **Select a Scenario:** Use the sidebar dropdown to choose one of the 6 preset scenarios (e.g., *2. Two Hospitals Competing for Scarce O-*).
+1. **Select a Scenario or Click a Hospital:** Use the sidebar dropdown to choose one of the 6 preset scenarios (e.g., *2. Two Hospitals Competing for Scarce O-*), or click a hospital to raise a request interactively from the clinical intake dialog.
 2. **Inspect Initial State:** Review the Regional Network Map, Central Bank stock levels, and queued requests in the callout card above the map.
-3. **Step the Clock:** Click **Step 1 min** to advance simulation time ($\Delta t = 1.0$ min). The Central Blood Bank automatically runs priority allocation on pending requests and dispatches available delivery vehicles.
-4. **Monitor Active Transit:** Observe delivery vans moving along road segments on the map, view waypoint hops in the Route Status card, and inspect live thermal readings.
-5. **Fast-Forward to Completion:** Click **Run to end** to step the simulation continuously until active deliveries finish.
+3. **Step the Clock:** Click **Step 1 min** to advance simulation time ($\Delta t = 1.0$ min). The Central Blood Bank automatically runs priority allocation on pending requests and dispatches available delivery vehicles in score rank order.
+4. **Monitor Active Transit & Inject Faults:** Observe delivery vans moving along road segments on the map, view waypoint hops in the Route Status card, and inspect live thermal readings. Click **Inject breach** to simulate a refrigeration failure mid-transit and observe immediate quarantine and backup dispatch.
+5. **Fast-Forward to Completion:** Click **Run to end** to step the simulation continuously until all active deliveries finish.
 6. **Analyze Results:** Review the four KPI cards (Requests, Fulfilled, In Transit / Delivered, Breaches), the Allocation Decisions table with multi-criteria score breakdowns, and the FIPA-ACL message timeline.
 
 ---
@@ -72,7 +70,7 @@ The system uses standard Python libraries pinned in [requirements.txt](requireme
 
 ### Architectural Rationale: Why Not Mesa or SPADE?
 
-- **Why not Mesa?** Mesa is designed primarily for 2D grid/lattice agent-based social and economic modeling. It does not provide built-in FIPA-ACL message performatives or graph-based routing abstractions. Implementing the domain logic directly using Python dataclasses and NetworkX graphs kept the simulation modular, lightweight, and directly testable without framework overhead.
+- **Why not Mesa?** Mesa provides scheduling/data collection but no agent messaging protocol; our model needed a message bus and A* on a road graph, which were simpler to implement directly.
 - **Why not SPADE?** SPADE requires an external XMPP/Jabber server daemon and asynchronous network I/O. This introduces network latency, external process dependencies, and non-deterministic message arrival orders. For an educational simulation that requires deterministic test verification and synchronized time stepping, an in-memory `MessageBus` managed by `SimulationEngine` is more reliable and reproducible.
 
 ---
@@ -106,7 +104,7 @@ The simulation executes in synchronous discrete-time steps ($\Delta t = 1.0$ min
 ### Agent Roles
 
 - **Hospital Agent (`H1` to `H5`):** Tracks local hospital stock and scheduled surgical needs. When stock is insufficient for upcoming surgeries, it calculates time-to-need ($T_{need}$) and submits a `REQUEST` message. Upon delivery, it inspects the vehicle temperature log and replies with `ACK`.
-- **Central Blood Bank Agent (`CBB`):** Manages regional inventory. Receives hospital requests, computes multi-attribute scores, runs greedy heap allocation with FEFO rotation, and dispatches primary vehicles (`VAN-01`, `VAN-02`).
+- **Central Blood Bank Agent (`CBB`):** Manages regional inventory. Receives hospital requests, computes multi-attribute scores, runs greedy heap allocation with FEFO rotation, and dispatches primary vehicles (`VAN-01`, `VAN-02`) by allocation rank.
 - **Reserve Blood Bank Agent (`RBB`):** Maintains reserve buffer stock. When `CBB` experiences stockouts or temperature breaches, `RBB` processes `BACKUP_REQUEST` messages and dispatches reserve vehicles (`VAN-03`, `VAN-04`).
 - **Delivery Agent (`VAN-01` to `VAN-04`):** Navigates the road network using hand-crafted $A^*$ search. Emits `STATUS_UPDATE` messages with position and temperature, monitors thermal sensor readings, and raises `BREACH_ALERT` if limits are exceeded.
 
@@ -118,7 +116,8 @@ sequenceDiagram
     participant H as Hospital Agent
     participant CBB as Central Blood Bank
     participant RBB as Reserve Blood Bank
-    participant DEV as Delivery Agent (VAN-01)
+    participant DEV as Primary Vehicle (VAN-01)
+    participant BDEV as Backup Vehicle (VAN-03)
 
     H->>CBB: REQUEST (Blood Type, Units, Urgency, Need Time)
     Note over CBB: Score requests, rank via max-heap, select units via FEFO
@@ -126,20 +125,30 @@ sequenceDiagram
         CBB->>H: INFORM (Approval, Rank, ETA)
         CBB->>DEV: DISPATCH (A* Path, Assigned Units, Deadline)
         DEV->>CBB: ACCEPT (Dispatch Confirmed)
-        loop Every Simulation Step
+        loop In-Transit Monitoring
             DEV->>CBB: STATUS_UPDATE (Coordinates, Temp, ETA)
         end
-        DEV->>H: DELIVERED (Units Delivered)
-        H->>CBB: ACK (Receipt Confirmed, Temp Verified)
-    else Stock Exhausted or In-Transit Breach
+        alt Mid-Transit Temperature Breach Fault
+            DEV->>CBB: BREACH_ALERT (Temp Breach Confirmed, Unit IDs)
+            CBB->>DEV: QUARANTINE (Halt Movement, Quarantine Units)
+            CBB->>RBB: BACKUP_REQUEST (Immediate Replacement Request)
+            RBB->>CBB: PROPOSE (Backup Sourced, ETA)
+            RBB->>BDEV: DISPATCH (Backup Vehicle Route)
+            BDEV->>H: DELIVERED (Replacement Units)
+            H->>RBB: ACK (Receipt Confirmed, Temp Verified in Range)
+        else Clean Cold-Chain Transit
+            DEV->>H: DELIVERED (Units Delivered)
+            H->>CBB: ACK (Receipt Confirmed, Temp Verified)
+        end
+    else Stock Exhausted at CBB
         CBB->>RBB: BACKUP_REQUEST (Units Needed, Urgency)
         alt RBB Has Stock
             RBB->>CBB: PROPOSE (Backup Sourced, ETA)
-            RBB->>DEV: DISPATCH (Backup Vehicle)
-            DEV->>H: DELIVERED (Replacement Units)
+            RBB->>BDEV: DISPATCH (Backup Vehicle)
+            BDEV->>H: DELIVERED (Units Delivered)
             H->>RBB: ACK (Receipt Confirmed)
         else RBB Depleted
-            CBB->>H: REFUSE (Stock Exhausted)
+            CBB->>H: INFORM / REFUSE (DEFERRED with Aging Bonus or Refused)
         end
     end
 ```
@@ -207,6 +216,16 @@ Where $\text{Max Speed}_{\text{km/h}} = 70.0\text{ km/h}$, defined as `max_speed
    $$h(u) \le c(u, v) + h(v)$$
    This satisfies the consistency condition, guaranteeing that node expansions are monotonic and optimal without reopening closed nodes.
 
+> [!IMPORTANT]
+> **Configuration Conditions Required by the A* Optimality Proof:**
+> The mathematical proof of admissibility and consistency strictly relies on two physical configuration conditions in [config/city.yaml](config/city.yaml):
+> 1. **Upper-Bounded Road Speeds:** The base speed of every edge does not exceed `max_speed_kmh`:
+>    $$\forall (u, v) \in E: \quad \text{Base Speed}(u, v) \le \text{max\_speed\_kmh} \quad (55.0 \le 70.0\text{ km/h})$$
+> 2. **Euclidean Lower Bound on Edge Distance:** Every road edge length is greater than or equal to the straight-line Euclidean distance between its endpoint coordinates:
+>    $$\forall (u, v) \in E: \quad \text{Distance}_{\text{km}}(u, v) \ge \|\mathbf{p}_u - \mathbf{p}_v\|_2$$
+>
+> Both conditions are actively validated at startup inside `CityNetwork.load_from_config()` in [src/city.py](src/city.py), preventing any invalid topology from breaking $A^*$ optimality guarantees.
+
 ---
 
 ### First-Expiry-First-Out Shelf-Life Sorting
@@ -251,95 +270,114 @@ If exact blood matches are unavailable, the system evaluates compatible donor al
 
 ## Scenario Walkthroughs and Experimental Results
 
-The simulation includes 6 preset scenarios to demonstrate each algorithmic capability. The numbers and outcomes below match current simulation output.
+The simulation includes 6 preset scenarios to demonstrate each algorithmic capability. The numbers and outcomes below match actual current simulation output from the execution engine.
 
 ### Scenario 1: Single Routine Request
 - **Setup:** City General (`H1`) requests 2 units of $A^+$ (Routine surgery, $T_{need} = 90.0$ min).
 - **Scores:**
   - Rank 1: `H1` score = **0.899** ($w_1 \cdot U = 0.350$, $w_2 \cdot T = 0.167$, $w_3 \cdot D = 0.225$, $w_4 \cdot R = 0.157$, $w_5 \cdot \text{wait} = 0.000$).
 - **Execution & Outcome:**
-  - `CBB` allocates 2 units of $A^+$ via FEFO.
-  - Vehicle `VAN-01` dispatches along route `['CBB', 'J1', 'H1']`.
-  - Delivery completes at simulation time $T+9.0$ min.
+  - `CBB` allocates 2 units of $A^+$ via FEFO (`U-CBB-AP-01`, `U-CBB-AP-02`).
+  - Vehicle `VAN-01` dispatches along route `['CBB', 'J1', 'H1']` at $T=0.0$ (ETA 9.5 min).
+  - Delivery completes at simulation time $T+9.0$ min on time (well ahead of the 90.0 min surgical deadline).
   - **Result:** 1 request received, 1 fulfilled, 0 partial, 0 refused, 2 units delivered on time.
 
 ---
 
-### Scenario 2: Two Hospitals Competing for Scarce O-
+### Scenario 2: Two Hospitals Competing for Scarce O- (Priority Allocation, Starvation Aging, and Restock)
 - **Setup:**
-  - `H1` requests 2 units of $O^-$ (Emergency, $T_{need} = 15.0$ min, trauma shock).
-  - `H3` requests 2 units of $O^-$ (Routine, $T_{need} = 120.0$ min, transfusion).
-  - Central Bank stock of $O^-$ is restricted to 2 units. Reserve Bank $O^-$ stock is depleted to test refusal.
-- **Scores:**
-  - Rank 1 (`H1`): score = **2.860** ($w_1 \cdot U = 1.050$, $w_2 \cdot T = 1.000$, $w_3 \cdot D = 0.360$, $w_4 \cdot R = 0.450$).
-  - Rank 2 (`H3`): score = **1.375** ($w_1 \cdot U = 0.350$, $w_2 \cdot T = 0.125$, $w_3 \cdot D = 0.450$, $w_4 \cdot R = 0.450$).
-- **Execution & Outcome:**
+  - `H1` requests 2 units of $O^-$ (Emergency trauma shock, $T_{need} = 15.0$ min).
+  - `H3` requests 2 units of $O^-$ (Routine transfusion, $T_{need} = 120.0$ min).
+  - Central Bank stock of $O^-$ is restricted to 2 units (`U-CBB-ON-01`, `U-CBB-ON-02`). Reserve Bank $O^-$ stock is depleted (0 units).
+- **Initial Contention ($T=0.0$):**
+  - Rank 1 (`H1`): score = **2.860** ($w_1 \cdot U = 1.050$, $w_2 \cdot T = 1.000$, $w_3 \cdot D = 0.360$, $w_4 \cdot R = 0.450$, $w_5 \cdot \text{wait} = 0.000$).
+  - Rank 2 (`H3`): score = **1.375** ($w_1 \cdot U = 0.350$, $w_2 \cdot T = 0.125$, $w_3 \cdot D = 0.450$, $w_4 \cdot R = 0.450$, $w_5 \cdot \text{wait} = 0.000$).
   - `CBB` awards the 2 available $O^-$ units to `H1` (`FULFILLED`).
-  - `VAN-01` delivers to `H1` along `['CBB', 'J1', 'H1']` at $T+9.0$ min on time.
-  - `H3` cannot be fulfilled due to total stock exhaustion. A `BACKUP_REQUEST` to `RBB` is refused.
-  - **Result:** 2 requests received, 1 fulfilled, 0 partial, 1 refused, 2 units delivered on time.
+  - `H3` cannot be fulfilled immediately due to stock exhaustion. A `BACKUP_REQUEST` to `RBB` is refused. `H3` is marked `DEFERRED` with a 30-minute priority credit added to its waiting accumulator to prevent starvation.
+  - `VAN-01` dispatches to `H1` at $T=0.0$ via `['CBB', 'J1', 'H1']` and delivers at $T+9.0$ min on time.
+- **Restock Event ($T=20.0$) and Aging Term:**
+  - At simulation time $T=20.0$, a restock event delivers 2 units of $O^-$ (`U-RESTOCK-ON-01`, `U-RESTOCK-ON-02`) to CBB.
+  - `CBB` re-allocates pending deferred requests. `H3`'s waiting term has aged by 20 simulation minutes (plus the 30-minute deferred credit = 50.0 min effective wait time, $w_5 \cdot (\Delta t_{wait} \times 0.1) = 0.10 \times 5.0 = 0.500$).
+  - `H3`'s score increases from 1.375 to **1.875** (Rank 1) and is marked `FULFILLED`.
+  - Vehicle `VAN-01` (returned to CBB) is dispatched to `H3` along `['CBB', 'J2', 'J5', 'H3']` (ETA 15.5 min) at $T=20.0$.
+  - Delivery to `H3` completes at $T=35.0$ min on time (well within the 120.0 min surgical deadline).
+  - **Result:** 2 requests received, 2 fulfilled, 0 partial, 0 refused, 4 units delivered on time.
 
 ---
 
-### Scenario 3: Mass-Casualty Incident (4 Hospitals)
+### Scenario 3: Mass-Casualty Incident (4 Hospitals) with Rank-Based Vehicle Dispatch Queue
 - **Setup:** 4 concurrent hospital trauma requests:
-  - `H1`: 3 units $O^-$ (Emergency, $T_{need} = 15$ min)
-  - `H2`: 4 units $A^+$ (Emergency, $T_{need} = 20$ min)
-  - `H4`: 3 units $B^+$ (Urgent, $T_{need} = 45$ min)
-  - `H5`: 2 units $O^+$ (Urgent, $T_{need} = 60$ min)
-- **Scores:**
-  - Rank 1 (`H1`): score = **2.860**
-  - Rank 2 (`H2`): score = **2.228**
-  - Rank 3 (`H4`): score = **1.495**
-  - Rank 4 (`H5`): score = **1.445**
-- **Execution & Outcome:**
-  - All 4 requests are marked `FULFILLED` in score order.
-  - Central Bank vehicles dispatch: `VAN-01` to `H4` via `['CBB', 'J1', 'J3', 'H4']` and `VAN-02` to `H5` via `['CBB', 'J4', 'H5']`.
-  - **Result:** 4 requests received, 4 fulfilled, 0 partial, 0 refused, 5 units delivered on time.
+  - `H1`: 3 units $O^-$ (Emergency, $T_{need} = 15.0$ min)
+  - `H2`: 4 units $A^+$ (Emergency, $T_{need} = 20.0$ min)
+  - `H4`: 3 units $B^+$ (Urgent, $T_{need} = 45.0$ min)
+  - `H5`: 2 units $O^+$ (Urgent, $T_{need} = 60.0$ min)
+- **Allocation Ranking:**
+  - Rank 1 (`H1`): score = **2.860** (allocated 3 units $O^-$)
+  - Rank 2 (`H2`): score = **2.228** (allocated 4 units $A^+$)
+  - Rank 3 (`H4`): score = **1.495** (allocated 3 units $B^+$)
+  - Rank 4 (`H5`): score = **1.445** (allocated 2 units $O^+$)
+  - All 4 requests are marked `FULFILLED` in score order (12 units total allocated).
+- **Rank-Ordered Vehicle Dispatch and Queueing:**
+  - Central Bank has 2 free delivery vehicles: `VAN-01` and `VAN-02`.
+  - Free vehicles are dispatched in strict allocation rank order. The two highest-scored requests receive vehicles immediately:
+    - At $T=0.0$, `VAN-01` is dispatched to `H1` (Rank 1) via `['CBB', 'J1', 'H1']` (ETA 9.5 min).
+    - At $T=0.0$, `VAN-02` is dispatched to `H2` (Rank 2) via `['CBB', 'J2', 'H2']` (ETA 8.9 min).
+    - `H4` (Rank 3) and `H5` (Rank 4) are queued in `pending_dispatches` in rank order. `H1` and `H2` are strictly dispatched before `H4` and `H5`.
+  - **Vehicle Returns and Queue Clearing:**
+    - At $T=8.0$, `VAN-02` completes delivery of 4 units to `H2` (`ACK`). Immediately upon becoming free in the same tick, `VAN-02` takes the next pending dispatch in the queue (`H4`) and departs along `['CBB', 'J1', 'J3', 'H4']`.
+    - At $T=9.0$, `VAN-01` completes delivery of 3 units to `H1` (`ACK`). Immediately upon becoming free in the same tick, `VAN-01` takes the next pending dispatch in the queue (`H5`) and departs along `['CBB', 'J4', 'H5']`.
+  - **Delivery Completion:**
+    - `VAN-01` delivers 2 units to `H5` at $T=24.0$ min on time (deadline 60 min).
+    - `VAN-02` delivers 3 units to `H4` at $T=30.0$ min on time (deadline 45 min).
+  - **Result:** 4 requests received, 4 fulfilled, 0 partial, 0 refused, 12 units delivered on time (average delivery time 17.8 min across all 4 hospitals).
 
 ---
 
-### Scenario 4: Temperature Breach Mid-Delivery -> Backup from Reserve
-- **Setup:** `H4` requests 2 units of $B^-$ (Emergency, $T_{need} = 25$ min).
+### Scenario 4: Cold Chain Breach Mid-Delivery -> Instant Same-Tick Backup Request
+- **Setup:** Metro Clinic (`H4`) requests 2 units of $B^-$ (Emergency, $T_{need} = 25.0$ min).
 - **Scores:**
   - Rank 1 (`H4`): score = **2.347** ($w_1 \cdot U = 1.050$, $w_2 \cdot T = 0.600$, $w_3 \cdot D = 0.337$, $w_4 \cdot R = 0.360$).
-- **Execution & Outcome:**
-  - `CBB` allocates 2 units of $B^-$ and dispatches `VAN-01` along `['CBB', 'J1', 'J3', 'H4']`.
-  - At $T+2.0$, refrigeration failure occurs. Onboard temperature exceeds $10^\circ\text{C}$ (reaching 60.8°C).
-  - After 3 consecutive out-of-band readings, Rule 1 fires: cargo is quarantined and `BREACH_ALERT` is sent.
-  - `CBB` evaluates distances: Reserve Bank (`RBB`) is closer to `H4` than `CBB`.
-  - `CBB` sends `BACKUP_REQUEST` to `RBB`. `RBB` dispatches `VAN-03` along `['RBB', 'J7', 'J6', 'H4']`.
-  - Replacement cargo is delivered to `H4` at $T+38.0$ min.
-  - **Result:** 1 request received, 1 fulfilled, 2 units quarantined, 3 units delivered (replacement arrived `Late by 13 min` relative to the original 25-minute deadline).
+- **Thermal Fault and Bounded Ramp-Up:**
+  - `CBB` allocates 2 units of $B^-$ (`U-CBB-BN-01`, `U-CBB-BN-02`) and dispatches `VAN-01` along `['CBB', 'J1', 'J3', 'H4']` at $T=0.0$.
+  - At $T=2.0$, refrigeration failure occurs (`HOT` fault). Onboard temperature sensor readings ramp up and level off asymptotically at ~12–15 °C (~13.5 °C), avoiding unbounded runaway.
+  - At $T=5.0$, after 3 consecutive readings above $10.0^\circ\text{C}$ (readings: 10.6°C, 12.0°C, 12.8°C), Rule 1 fires: `VAN-01` halts on the road and transmits `BREACH_ALERT` to `CBB`.
+- **Immediate Same-Tick Backup Sourcing:**
+  - Upon receiving `BREACH_ALERT`, `CBB` immediately issues a `QUARANTINE` order to `VAN-01` (quarantining 2 spoiled units) and in the **exact same tick ($T=5.0$ min)** initiates backup sourcing rather than waiting for the original vehicle to return.
+  - Sourcing decision: `CBB` evaluates $A^*$ travel times: Reserve Bank (`RBB`) has a shorter transit time to `H4` (17.3 min via `['RBB', 'J7', 'J6', 'H4']`) than `CBB` (22.0 min via `['CBB', 'J1', 'J3', 'H4']`).
+  - `CBB` sends `BACKUP_REQUEST` to `RBB` at $T=5.0$ min.
+  - `RBB` immediately dispatches backup vehicle `VAN-03` carrying 2 fresh units of $B^-$ at **dispatch time $T=5.0$ min** along `['RBB', 'J7', 'J6', 'H4']`.
+  - `VAN-03` completes delivery to `H4` at **arrival time $T=22.0$ min** on time (well ahead of the 25.0 min emergency deadline).
+  - **Result:** 1 request received, 1 fulfilled, 0 partial, 0 refused, 2 units delivered, 2 units quarantined (the delivered KPI strictly counts units accepted by the hospital).
 
 ---
 
-### Scenario 5: Traffic-Aware Route Selection
+### Scenario 5: Dynamic Congestion Avoidance
 - **Setup:**
-  - Heavy traffic congestion is pre-set on the Central Arterial road `CBB ➔ J4` (delay factor = 3.0x).
-  - Children's Hospital (`H5`) requests 2 units of $AB^+$ (Urgent, $T_{need} = 40$ min).
+  - Heavy traffic congestion is pre-set on central arterial `CBB ➔ J4` (delay factor = 3.0x).
+  - Children's Hospital (`H5`) requests 2 units of $AB^+$ (Urgent, $T_{need} = 40.0$ min).
 - **Scores:**
   - Rank 1 (`H5`): score = **1.390** ($w_1 \cdot U = 0.700$, $w_2 \cdot T = 0.375$, $w_3 \cdot D = 0.225$, $w_4 \cdot R = 0.090$).
 - **Execution & Outcome:**
-  - Baseline route `['CBB', 'J4', 'H5']` has effective travel time increased to ~30.1 minutes due to the 3.0x delay on `CBB–J4`.
-  - $A^*$ evaluates alternatives and selects the eastern corridor `['CBB', 'J2', 'J5', 'H5']` (~17.0 minutes).
-  - `VAN-01` dispatches via `['CBB', 'J2', 'J5', 'H5']` and delivers at $T+17.0$ min.
-  - **Result:** 1 request received, 1 fulfilled, 2 units delivered on time, bypassing the congested corridor.
+  - Direct baseline route `['CBB', 'J4', 'H5']` has effective travel time increased from 12.0 min to 35.9 min due to the 3.0x congestion penalty on `CBB–J4`.
+  - $A^*$ evaluates alternatives and selects the eastern bypass corridor `['CBB', 'J2', 'J5', 'H5']` (17.1 min).
+  - `VAN-01` dispatches via `['CBB', 'J2', 'J5', 'H5']` at $T=0.0$ and delivers at $T+17.0$ min on time (well ahead of the 40.0 min deadline).
+  - **Result:** 1 request received, 1 fulfilled, 0 partial, 0 refused, 2 units delivered on time, bypassing the congested corridor.
 
 ---
 
-### Scenario 6: Stockout -> Compatible Substitution
+### Scenario 6: Stockout Substitution via FEFO Compatibility
 - **Setup:**
-  - Central Bank stock of $B^+$ is 0 units (depleted).
-  - St. Mary's (`H2`) requests 3 units of $B^+$ (Urgent, $T_{need} = 35$ min).
-  - Central Bank maintains stock of compatible $B^-$ units.
+  - Central Bank stock of exact-match $B^+$ is 0 units (depleted).
+  - St. Mary's (`H2`) requests 3 units of $B^+$ (Urgent, $T_{need} = 35.0$ min).
+  - Central Bank maintains stock of compatible $O^+$ units.
 - **Scores:**
   - Rank 1 (`H2`): score = **1.579** ($w_1 \cdot U = 0.700$, $w_2 \cdot T = 0.429$, $w_3 \cdot D = 0.270$, $w_4 \cdot R = 0.180$).
 - **Execution & Outcome:**
-  - Exact match for $B^+$ is exhausted. The compatibility matrix identifies $B^-$ as a valid substitute.
-  - 3 units of $B^-$ are allocated under FEFO.
-  - `VAN-01` delivers to `H2` via `['CBB', 'J2', 'H2']` at $T+8.0$ min.
-  - **Result:** 1 request received, 1 fulfilled, 3 units delivered on time with recorded compatible substitution ($B^-$ for $B^+$).
+  - Exact match for $B^+$ is exhausted (0 units available).
+  - The RBC compatibility engine identifies $O^+$ as a safe universal donor substitute.
+  - `CBB` allocates 3 compatible units of $O^+$ (`U-CBB-OP-01`, `U-CBB-OP-02`, `U-CBB-OP-03`) sorted under FEFO by shelf-life.
+  - `VAN-01` delivers to `H2` via `['CBB', 'J2', 'H2']` at $T+8.0$ min on time (well ahead of the 35.0 min deadline).
+  - **Result:** 1 request received, 1 fulfilled, 0 partial, 0 refused, 3 units delivered on time with recorded compatible substitution ($O^+$ for $B^+$).
 
 ---
 

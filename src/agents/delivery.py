@@ -73,8 +73,8 @@ class DeliveryAgent(BaseAgent):
 
     @property
     def is_idle(self) -> bool:
-        """Vehicle is available for new dispatch if not currently en route."""
-        return not self.is_accepted or self.is_completed
+        """Vehicle is available for new dispatch if not currently en route or quarantined."""
+        return (not self.is_accepted or self.is_completed) and not self.is_quarantined
 
     @property
     def speed_kmh(self) -> float:
@@ -135,9 +135,18 @@ class DeliveryAgent(BaseAgent):
 
     def update_sensor_reading(self, sim_time: float) -> float:
         if self.injected_breach == "HOT":
-            self.current_temp = max(11.0, self.current_temp + random.uniform(2.0, 3.2))
+            # Ramp up toward and level off at ~12–15 °C
+            if self.current_temp < 12.0:
+                self.current_temp += random.uniform(1.8, 2.5)
+            else:
+                self.current_temp += (13.5 - self.current_temp) * 0.3 + random.gauss(0.0, 0.25)
+            self.current_temp = max(11.0, min(15.0, self.current_temp))
         elif self.injected_breach == "COLD":
-            self.current_temp = min(-0.5, self.current_temp - random.uniform(1.8, 2.5))
+            if self.current_temp > -0.5:
+                self.current_temp -= random.uniform(1.5, 2.2)
+            else:
+                self.current_temp += (-2.0 - self.current_temp) * 0.3 + random.gauss(0.0, 0.25)
+            self.current_temp = max(-5.0, min(0.0, self.current_temp))
         else:
             target = 4.0
             noise = random.gauss(0.0, 0.25)
@@ -181,6 +190,10 @@ class DeliveryAgent(BaseAgent):
 
         # 1. Update temperature sensor
         self.update_sensor_reading(sim_time)
+
+        # If quarantined mid-transit, halt movement and do not deliver spoiled units
+        if self.is_quarantined:
+            return
 
         # 2. Check dynamic traffic re-planning
         self.check_and_replan_route(sim_time)

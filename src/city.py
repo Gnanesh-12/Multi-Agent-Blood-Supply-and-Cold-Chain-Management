@@ -103,6 +103,19 @@ class CityNetwork:
             delay = float(road.get("delay_factor", 1.0))
             name = road.get("name", f"{u}-{v}")
 
+            # Validate physical consistency:
+            # 1. max_speed_kmh >= all edge base speeds
+            if speed > self.max_speed_kmh:
+                raise ValueError(
+                    f"Road {u}-{v} base speed ({speed} km/h) exceeds city max_speed_kmh ({self.max_speed_kmh} km/h)"
+                )
+            # 2. edge length >= Euclidean distance between endpoints
+            euc_dist = self.euclidean_distance_km(u, v)
+            if dist < euc_dist - 1e-5:
+                raise ValueError(
+                    f"Road {u}-{v} length ({dist} km) is less than Euclidean distance ({euc_dist:.3f} km)"
+                )
+
             self.graph.add_edge(
                 u,
                 v,

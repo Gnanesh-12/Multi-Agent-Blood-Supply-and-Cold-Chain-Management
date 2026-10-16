@@ -54,6 +54,7 @@ class SimulationEngine:
         # Historical analytics
         self.allocation_history: List[AllocationDecision] = []
         self.request_tracking: Dict[str, Dict[str, Any]] = {}  # {req_id: metadata}
+        self.restock_events: List[Dict[str, Any]] = []
 
         self._initialize_agents()
 
@@ -63,6 +64,7 @@ class SimulationEngine:
         self.delivery_agents.clear()
         self.allocation_history.clear()
         self.request_tracking.clear()
+        self.restock_events.clear()
         self.bus.reset()
         self.rule_engine.reset()
         self.current_time = 0.0
@@ -214,6 +216,18 @@ class SimulationEngine:
         """
         dt = dt_minutes if dt_minutes is not None else self.step_size_minutes
 
+        # Step 0: Process scheduled restock events
+        for event in self.restock_events:
+            if not event.get("processed") and self.current_time >= event["time"]:
+                event["processed"] = True
+                bank = self.central_bank if event["bank_id"] == "CBB" else self.reserve_bank
+                if bank:
+                    bank.add_restock_units(
+                        blood_type=event["blood_type"],
+                        count=event["units_count"],
+                        sim_time=self.current_time,
+                    )
+
         # Step 1: Safety Rule Evaluation BEFORE any other decision
         for dev_id, dev in list(self.delivery_agents.items()):
             if dev.is_accepted and not dev.is_completed and not dev.is_quarantined:
@@ -253,29 +267,34 @@ class SimulationEngine:
         # Step 2: Physical movement and telemetry of active delivery agents
         for dev_id, dev in list(self.delivery_agents.items()):
             if not dev.is_completed:
-                dev.advance_step(dt, self.current_time)
-                if dev.is_completed and dev.request_id in self.request_tracking:
-                    self.request_tracking[dev.request_id]["delivered_at"] = self.current_time
-                    self.request_tracking[dev.request_id]["status"] = "DELIVERED"
-                    if not self.request_tracking[dev.request_id].get("outcome"):
-                        self.request_tracking[dev.request_id]["outcome"] = (
-                            AllocationOutcome.FULFILLED.value
-                            if self.request_tracking[dev.request_id].get("allocated", 0) >= self.request_tracking[dev.request_id].get("units_requested", 1)
-                            else AllocationOutcome.PARTIAL.value
-                        )
-                    deadline_status = dev.deadline_status
-                    if not deadline_status:
-                        dl = self.request_tracking[dev.request_id].get("deadline", dev.deadline)
-                        if self.current_time <= dl:
-                            deadline_status = "On time"
-                        else:
-                            late = round(self.current_time - dl, 1)
-                            l_str = f"{int(late)}" if late == int(late) else f"{late}"
-                            deadline_status = f"Late by {l_str} min"
-                    self.request_tracking[dev.request_id]["deadline_status"] = deadline_status
-                    for d in self.allocation_history:
-                        if d.request_id == dev.request_id:
-                            d.deadline_status = deadline_status
+                if dev.is_quarantined:
+                    dev.update_sensor_reading(self.current_time)
+                else:
+                    orig_req_id = dev.request_id
+                    dev.advance_step(dt, self.current_time)
+                    # Vehicle completed delivery (or completed and was immediately reassigned)
+                    completed_req_id = orig_req_id if (dev.is_completed or dev.request_id != orig_req_id) else None
+                    if completed_req_id and completed_req_id in self.request_tracking:
+                        if self.request_tracking[completed_req_id]["delivered_at"] is None:
+                            self.request_tracking[completed_req_id]["delivered_at"] = self.current_time
+                            self.request_tracking[completed_req_id]["status"] = "DELIVERED"
+                            if not self.request_tracking[completed_req_id].get("outcome"):
+                                self.request_tracking[completed_req_id]["outcome"] = (
+                                    AllocationOutcome.FULFILLED.value
+                                    if self.request_tracking[completed_req_id].get("allocated", 0) >= self.request_tracking[completed_req_id].get("units_requested", 1)
+                                    else AllocationOutcome.PARTIAL.value
+                                )
+                            dl = self.request_tracking[completed_req_id].get("deadline", self.current_time)
+                            if self.current_time <= dl:
+                                deadline_status = "On time"
+                            else:
+                                late = round(self.current_time - dl, 1)
+                                l_str = f"{int(late)}" if late == int(late) else f"{late}"
+                                deadline_status = f"Late by {l_str} min"
+                            self.request_tracking[completed_req_id]["deadline_status"] = deadline_status
+                            for d in self.allocation_history:
+                                if d.request_id == completed_req_id:
+                                    d.deadline_status = deadline_status
 
         # Step 3: Agent step execution (Hospitals, Blood Banks)
         for h_agent in self.hospitals.values():
@@ -297,10 +316,14 @@ class SimulationEngine:
         """Run simulation steps continuously until all active deliveries finish."""
         steps_taken = 0
         while steps_taken < max_steps:
-            active_deliveries = [d for d in self.delivery_agents.values() if not d.is_completed]
+            active_deliveries = [
+                d for d in self.delivery_agents.values()
+                if d.is_accepted and not d.is_completed and not d.is_quarantined
+            ]
             has_pending = (
-                bool(self.central_bank and self.central_bank.pending_requests)
+                bool(self.central_bank and (self.central_bank.pending_requests or self.central_bank.pending_dispatches))
                 or bool(active_deliveries)
+                or any(not ev.get("processed") for ev in self.restock_events)
             )
             if not has_pending and steps_taken > 0:
                 break
@@ -361,6 +384,17 @@ class SimulationEngine:
                 time_to_need_minutes=120.0,
                 reason="Scheduled Sickle Cell Transfusion",
             )
+
+            # Restock event: 2 units of O- arrive at Central Bank at T+20 to serve deferred request
+            self.restock_events = [
+                {
+                    "time": 20.0,
+                    "bank_id": "CBB",
+                    "blood_type": "O-",
+                    "units_count": 2,
+                    "processed": False,
+                }
+            ]
 
         elif scenario_name == "3. Mass-Casualty Incident (4 Hospitals)":
             requests_data = [

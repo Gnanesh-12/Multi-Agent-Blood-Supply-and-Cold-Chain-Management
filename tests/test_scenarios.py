@@ -3,6 +3,7 @@
 from pathlib import Path
 import pytest
 from src.simulation import SimulationEngine
+from src.messaging import Performative
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "city.yaml"
 
@@ -133,17 +134,14 @@ def test_two_hospitals_o_negative_message_flow():
     # Filter non-status updates to verify macro sequence
     macro_msgs = [m for m in all_msgs if m.performative != Performative.STATUS_UPDATE]
 
-    # Verify DELIVERED and ACK at the end of the chain
-    deliv_msg = macro_msgs[-2]
-    ack_msg = macro_msgs[-1]
+    # Verify DELIVERED and ACK for H1 occur in macro sequence
+    h1_delivs = [m for m in macro_msgs if m.performative == Performative.DELIVERED and m.receiver == "H1"]
+    h1_acks = [m for m in macro_msgs if m.performative == Performative.ACK and m.sender == "H1"]
 
-    assert deliv_msg.sender == van_id
-    assert deliv_msg.receiver == "H1"
-    assert deliv_msg.performative == Performative.DELIVERED
-
-    assert ack_msg.sender == "H1"
-    assert ack_msg.receiver == "CBB"
-    assert ack_msg.performative == Performative.ACK
+    assert len(h1_delivs) >= 1
+    assert len(h1_acks) >= 1
+    assert h1_delivs[0].sender == van_id
+    assert h1_acks[0].receiver == "CBB"
 
     # Verify every message carries conversation_id and human-readable summary
     for m in all_msgs:
@@ -162,9 +160,48 @@ def test_metrics_updating_accurately_after_deliveries():
 
     metrics = engine.get_summary_metrics()
     assert metrics["requests_received"] == 2
-    assert metrics["fulfilled"] == 1, "Hospital 1 request should remain counted as fulfilled after delivery"
+    assert metrics["fulfilled"] == 2, "Both initial H1 and restocked H3 should be fulfilled"
     assert metrics["partial"] == 0
-    assert metrics["refused"] == 1
-    assert metrics["units_delivered"] == 2
+    assert metrics["refused"] == 0
+    assert metrics["units_delivered"] == 4
     assert metrics["fulfilled"] + metrics["partial"] + metrics["refused"] == metrics["requests_received"]
+
+
+def test_scenario_3_vehicle_dispatch_order_by_rank():
+    """Verify that in scenario 3, vehicle assignment follows allocation rank:
+    H1 (Rank 1) and H2 (Rank 2) are dispatched before H4 (Rank 3) and H5 (Rank 4).
+    """
+    engine = SimulationEngine(CONFIG_PATH, random_seed=42)
+    engine.load_preset_scenario("3. Mass-Casualty Incident (4 Hospitals)")
+    engine.run_allocation()
+    engine.run_until_idle(max_steps=60)
+
+    dispatch_times = {}
+    for m in engine.bus.history:
+        if m.performative == Performative.DISPATCH:
+            dest = m.payload.get("destination_hospital")
+            if dest and dest not in dispatch_times:
+                dispatch_times[dest] = m.timestamp
+
+    assert "H1" in dispatch_times
+    assert "H2" in dispatch_times
+    assert "H4" in dispatch_times
+    assert "H5" in dispatch_times
+
+    # In scenario 3, H1 and H2 are dispatched before H4 and H5
+    assert dispatch_times["H1"] < dispatch_times["H4"]
+    assert dispatch_times["H1"] < dispatch_times["H5"]
+    assert dispatch_times["H2"] < dispatch_times["H4"]
+    assert dispatch_times["H2"] < dispatch_times["H5"]
+
+
+def test_scenario_4_quarantine_and_delivered_kpi():
+    """Verify that in scenario 4, units delivered KPI counts only accepted units (2 delivered, 2 quarantined)."""
+    engine = SimulationEngine(CONFIG_PATH, random_seed=42)
+    engine.load_preset_scenario("4. Temperature Breach Mid-Delivery -> Backup from Reserve")
+    engine.run_until_idle(max_steps=50)
+
+    metrics = engine.get_summary_metrics()
+    assert metrics["units_delivered"] == 2, f"Expected 2 units delivered, got {metrics['units_delivered']}"
+    assert metrics["breaches_quarantined"] == 2, f"Expected 2 units quarantined, got {metrics['breaches_quarantined']}"
 
